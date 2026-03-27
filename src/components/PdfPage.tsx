@@ -1,11 +1,17 @@
 "use client"
 
 import { useEffect, useRef } from "react"
+// Importamos los tipos específicos para eliminar los errores de las capturas
+import type { 
+  PDFDocumentProxy, 
+  PDFPageProxy, 
+  RenderTask, 
+  PageViewport 
+} from "pdfjs-dist"
 
 const pageRenderCache = new Map<number, HTMLCanvasElement>()
 const CACHE_RADIUS = 3
 
-// Función para resetear todo si cambias de libro
 export const clearPdfCache = () => {
   pageRenderCache.forEach(canvas => {
     canvas.width = 0;
@@ -14,31 +20,31 @@ export const clearPdfCache = () => {
   pageRenderCache.clear();
 };
 
-export default function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: number }) {
+interface PdfPageProps {
+  pdf: PDFDocumentProxy | null;
+  pageNumber: number;
+}
+
+export default function PdfPage({ pdf, pageNumber }: PdfPageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const renderTaskRef = useRef<any>(null)
+  // Cambiamos 'any' por el tipo correcto de la librería
+  const renderTaskRef = useRef<RenderTask | null>(null)
 
   useEffect(() => {
-    // 1. Validación de seguridad
-    if (!pdf) {
-        console.warn("Esperando objeto PDF...");
-        return;
-    }
-    if (!canvasRef.current) return;
+    if (!pdf || !canvasRef.current) return;
 
     let cancelled = false;
-    let currentPageObj: any = null;
+    let currentPageObj: PDFPageProxy | null = null;
 
     const renderPage = async () => {
-      // Cancelar tarea previa si existe
       if (renderTaskRef.current) {
         renderTaskRef.current.cancel();
       }
 
       const canvas = canvasRef.current!;
-      const ctx = canvas.getContext("2d")!; // Quitamos el alpha:false temporalmente para descartar errores
+      const ctx = canvas.getContext("2d", { alpha: false })!;
 
-      // 2. Lógica de Caché
+      // 1. Recuperar de caché si existe
       if (pageRenderCache.has(pageNumber)) {
         const cached = pageRenderCache.get(pageNumber)!;
         canvas.width = cached.width;
@@ -53,40 +59,56 @@ export default function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: num
 
         const baseViewport = currentPageObj.getViewport({ scale: 1 });
         
-        // Medidas seguras
-        const w = typeof window !== 'undefined' ? window.innerWidth : 800;
-        const h = typeof window !== 'undefined' ? window.innerHeight : 600;
+        // --- LÓGICA DE TAMAÑO FIJO ---
+        // Usamos dimensiones de referencia para que no se "infle" el canvas
+        const w = window.innerWidth;
+        const h = window.innerHeight;
 
-        const scale = w < 640 
-          ? (w * 0.9) / baseViewport.width 
-          : (h * 0.8) / baseViewport.height;
+        const scale = w < 1024 
+          ? (w * 0.85) / baseViewport.width 
+          : (h * 0.7) / baseViewport.height;
 
-        const viewport = currentPageObj.getViewport({ scale: scale || 1 });
+        const viewport: PageViewport = currentPageObj.getViewport({ scale: scale || 1 });
 
+        // Ajustamos el canvas físicamente
         canvas.width = viewport.width;
         canvas.height = viewport.height;
 
-        // Pintar fondo blanco preventivo
+        // Limpieza preventiva
         ctx.fillStyle = "white";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+        // Renderizado
         const renderTask = currentPageObj.render({
           canvasContext: ctx,
           viewport: viewport,
+          // Añadimos la referencia al canvas para cumplir con la interfaz de la librería
+          canvas: canvas 
         });
 
         renderTaskRef.current = renderTask;
-        await renderTask.promise;
+        
+        try {
+          await renderTask.promise;
+        } catch (err: unknown) {
+          // Manejo de errores sin usar 'any'
+          const error = err as { name?: string };
+          if (error.name === "RenderingCancelledException") return;
+          throw err;
+        }
 
         if (!cancelled) {
           const offscreen = document.createElement("canvas");
           offscreen.width = canvas.width;
           offscreen.height = canvas.height;
-          offscreen.getContext("2d")!.drawImage(canvas, 0, 0);
-          pageRenderCache.set(pageNumber, offscreen);
+          const offscreenCtx = offscreen.getContext("2d");
+          if (offscreenCtx) {
+            offscreenCtx.drawImage(canvas, 0, 0);
+            pageRenderCache.set(pageNumber, offscreen);
+          }
         }
 
-        // Limpieza de memoria
+        // Limpieza de caché (Mantiene memoria optimizada)
         const pagesToKeep = new Set([
           1, 
           ...Array.from({ length: CACHE_RADIUS * 2 + 1 }, (_, i) => pageNumber - CACHE_RADIUS + i)
@@ -102,8 +124,8 @@ export default function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: num
 
         currentPageObj.cleanup();
 
-      } catch (e: any) {
-        if (e?.name !== "RenderingCancelledException") console.error("Error:", e);
+      } catch (e) {
+        console.error(`Error en renderizado:`, e);
       }
     };
 
@@ -117,20 +139,27 @@ export default function PdfPage({ pdf, pageNumber }: { pdf: any; pageNumber: num
 
   return (
     <div style={{ 
-      display: 'inline-block', // Para que el div se ajuste al tamaño del canvas
-      lineHeight: 0            // Elimina espacios extra verticales por defecto de HTML
+      display: 'inline-block', 
+      lineHeight: 0, 
+      position: 'relative',
+      transformStyle: "preserve-3d", 
+      backfaceVisibility: "hidden"
     }}>
       <canvas
         ref={canvasRef}
+        className="transition-opacity duration-300 ease-in"
         style={{
           display: "block",
           background: "white",
-          // Quitamos el margin: "0 auto"
+          // Estos límites aseguran que la página nunca "explote" de tamaño
           maxWidth: "100%",
-          maxHeight: "100%",
+          maxHeight: "75vh",
+          width: "auto",
+          height: "auto",
+          objectFit: "contain",
           boxShadow: pageNumber % 2 === 0 
-            ? "inset -5px 0 10px rgba(0,0,0,0.1)" // Sombra interna derecha para página par (efecto lomo)
-            : "inset 5px 0 10px rgba(0,0,0,0.1)"  // Sombra interna izquierda para impar
+            ? "inset -15px 0 30px -10px rgba(0,0,0,0.3), 10px 10px 20px rgba(0,0,0,0.2)" 
+            : "inset 15px 0 30px -10px rgba(0,0,0,0.3), -10px 10px 20px rgba(0,0,0,0.2)"
         }}
       />
     </div>

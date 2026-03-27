@@ -1,34 +1,35 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState } from "react"
 import { loadPdfJs } from "@/lib/pdf"
 import PdfPage from "./PdfPage"
+import type { PDFDocumentProxy } from "pdfjs-dist"
 
 export default function PdfBook({ url }: { url: string }) {
-  const [pdf, setPdf] = useState<any>(null)
+  const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [numPages, setNumPages] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [isDesktop, setIsDesktop] = useState(false)
-  
-  // Ref para manejar el Swipe
-  const touchStart = useRef<number | null>(null)
 
-  // 1. Cargar PDF
+  // Carga del PDF
   useEffect(() => {
     let mounted = true
     const load = async () => {
-      const pdfjs = await loadPdfJs()
-      const doc = await pdfjs.getDocument(url).promise
-      if (!mounted) return
-      setPdf(doc)
-      setNumPages(doc.numPages)
-      setCurrentPage(1)
+      try {
+        const pdfjs = await loadPdfJs()
+        const doc = await pdfjs.getDocument(url).promise
+        if (!mounted) return
+        setPdf(doc)
+        setNumPages(doc.numPages)
+      } catch (e) {
+        console.error("Error al cargar el PDF:", e)
+      }
     }
     load()
     return () => { mounted = false }
   }, [url])
 
-  // 2. Detectar Desktop (Breakpoint de Tablet/PC)
+  // Detección de pantalla
   useEffect(() => {
     const check = () => setIsDesktop(window.innerWidth >= 1024)
     check()
@@ -36,117 +37,160 @@ export default function PdfBook({ url }: { url: string }) {
     return () => window.removeEventListener("resize", check)
   }, [])
 
-  if (!pdf) return <div className="w-full h-screen flex items-center justify-center bg-gray-900 text-white">Cargando PDF…</div>
+  if (!pdf) return (
+    <div className="h-screen flex items-center justify-center bg-[#0a0a0a] text-blue-500 font-mono tracking-widest animate-pulse">
+      SINCRONIZANDO EXPERIENCIA 3D...
+    </div>
+  )
 
-  // 3. Reglas editoriales y de estado
+  // Lógica de navegación
   const isCover = currentPage === 1
-  const hasBackCover = numPages % 2 === 0
-  
-  // Determinar si hay una página siguiente disponible para modo doble
-  const showDoublePage = isDesktop && !isCover && currentPage + 1 <= numPages
-
+  const hasNextPage = currentPage + 1 <= numPages
+  const showDoublePage = isDesktop && !isCover && hasNextPage
   const isLastPage = isDesktop 
-    ? (showDoublePage ? currentPage + 1 >= numPages : currentPage >= numPages)
-    : currentPage >= numPages
+    ? (isCover ? currentPage >= numPages : currentPage + 1 >= numPages)
+    : (currentPage >= numPages)
 
-  // 4. Navegación Corregida (Separación lógica Móvil vs Desktop)
   const nextPage = () => {
     setCurrentPage(p => {
       if (isDesktop) {
-        if (p === 1) return 2 // De portada a primera doble página
+        if (p === 1) return Math.min(2, numPages)
         return Math.min(p + 2, numPages)
       }
-      return Math.min(p + 1, numPages) // Lineal en móvil
+      return Math.min(p + 1, numPages)
     })
   }
 
   const prevPage = () => {
     setCurrentPage(p => {
       if (isDesktop) {
-        if (p <= 3) return 1 // Si estás en 2-3 o solo 2, vuelve a la portada
+        if (p <= 2) return 1
         return Math.max(p - 2, 1)
       }
-      return Math.max(p - 1, 1) // Lineal en móvil
+      return Math.max(p - 1, 1)
     })
   }
 
-  // 5. Manejo de Gestos (Swipe)
-  const onTouchStart = (e: React.TouchEvent) => {
-    touchStart.current = e.targetTouches[0].clientX
-  }
-
-  const onTouchEnd = (e: React.TouchEvent) => {
-    if (touchStart.current === null) return
-    const touchEnd = e.changedTouches[0].clientX
-    const distance = touchStart.current - touchEnd
-    const threshold = 50 // Sensibilidad del swipe
-
-    if (distance > threshold && !isLastPage) nextPage()
-    if (distance < -threshold && currentPage > 1) prevPage()
-    
-    touchStart.current = null
-  }
-
   return (
-    <div className="w-full h-screen flex flex-col overflow-hidden bg-[#1a1a1a] select-none">
+    <div className="w-full h-screen flex flex-col bg-[#0d0d0d] overflow-hidden select-none text-white">
       
-      {/* Área del libro con soporte táctil */}
-      <div 
-        className="flex-1 flex items-center justify-center overflow-hidden touch-none"
-        onTouchStart={onTouchStart}
-        onTouchEnd={onTouchEnd}
-      >
-        <div className={`flex shadow-2xl transition-all duration-300 ${isDesktop ? "" : "w-full justify-center"}`}>
-          {/* Página Actual (Izquierda o Única) */}
-          <PdfPage
-            key={`page-${currentPage}`}
-            pdf={pdf}
-            pageNumber={currentPage}
-          />
+      {/* ÁREA DE LECTURA CON PERSPECTIVA */}
+      <div className="flex-1 flex items-center justify-center p-4 md:p-10" style={{ perspective: "3000px" }}>
+        
+        <div 
+          key={currentPage} // ESTA KEY ES VITAL: Reinicia la animación al cambiar de página
+          className="relative flex"
+          style={{ 
+            transformStyle: "preserve-3d",
+            maxWidth: "95vw",
+            maxHeight: "75vh",
+            // DURACIÓN Y CURVA: 1.2s para que sea pausado y elegante
+            transition: "transform 1.2s cubic-bezier(0.645, 0.045, 0.355, 1)",
+            transform: isCover ? "rotateY(0deg)" : "rotateY(-3deg) rotateX(1deg)",
+            // Animación de entrada sutil
+            animation: "pageOpening 1.2s ease-out"
+          }}
+        >
+          {/* Lado Izquierdo */}
+          {currentPage <= numPages && (
+            <div className="relative group shadow-[0_20px_50px_rgba(0,0,0,0.8)]" style={{ transformStyle: "preserve-3d" }}>
+              <PdfPage pdf={pdf} pageNumber={currentPage} />
+              
+              {/* Brillo en esquina izquierda */}
+              {currentPage > 1 && (
+                <div 
+                  className="absolute top-0 left-0 w-32 h-32 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+                  style={{
+                    background: "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 60%)",
+                    clipPath: "polygon(0 0, 100% 0, 0 100%)"
+                  }}
+                />
+              )}
+            </div>
+          )}
 
-          {/* Segunda Página (Derecha) */}
+          {/* Lado Derecho */}
           {showDoublePage && (
-            <PdfPage
-              key={`page-${currentPage + 1}`}
-              pdf={pdf}
-              pageNumber={currentPage + 1}
-            />
+            <div className="relative group shadow-[0_20px_50px_rgba(0,0,0,0.8)] border-l border-black/30" style={{ transformStyle: "preserve-3d" }}>
+              <PdfPage pdf={pdf} pageNumber={currentPage + 1} />
+              
+              {!isLastPage && (
+                <div 
+                  className="absolute top-0 right-0 w-32 h-32 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+                  style={{
+                    background: "linear-gradient(-135deg, rgba(255,255,255,0.1) 0%, transparent 60%)",
+                    clipPath: "polygon(100% 0, 100% 100%, 0 0)"
+                  }}
+                />
+              )}
+            </div>
           )}
         </div>
       </div>
 
-      {/* Controles Estilizados */}
-      <div className="h-20 flex flex-col items-center justify-center gap-2 border-t border-gray-800 bg-[#111] text-white shrink-0 shadow-inner">
-        <div className="flex items-center gap-8">
-          <button 
-            className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            disabled={currentPage <= 1} 
-            onClick={prevPage}
-          >
-            ◀
-          </button>
-
-          <span className="font-mono text-sm tracking-widest">
-            {currentPage}{showDoublePage ? ` – ${currentPage + 1}` : ""} / {numPages}
-          </span>
-
-          <button 
-            className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-800 hover:bg-gray-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            disabled={isLastPage} 
-            onClick={nextPage}
-          >
-            ▶
-          </button>
-        </div>
+      {/* 🛠 BARRA DE NAVEGACIÓN REFORZADA */}
+      <div className="min-h-[120px] h-32 bg-black/80 backdrop-blur-2xl border-t border-white/5 flex items-center justify-between px-6 md:px-16 z-50 shadow-[0_-15px_40px_rgba(0,0,0,0.5)]">
         
-        {/* Barra de progreso visual abajo */}
-        <div className="w-64 h-1 bg-gray-800 rounded-full overflow-hidden">
-          <div 
-            className="h-full bg-blue-500 transition-all duration-300" 
-            style={{ width: `${(currentPage / numPages) * 100}%` }}
-          />
+        <div className="flex-1 hidden sm:flex">
+          <button 
+            onClick={() => setCurrentPage(1)}
+            className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/5 transition-all text-[10px] uppercase tracking-[0.2em] text-gray-500 hover:text-white"
+          >
+            Portada
+          </button>
         </div>
+
+        <div className="flex flex-col items-center gap-3">
+          <div className="flex items-center gap-8 md:gap-12">
+            <button
+              onClick={prevPage}
+              disabled={currentPage === 1}
+              className="w-12 h-12 flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600 disabled:opacity-0 transition-all active:scale-90"
+            >
+              <span className="text-xl">❮</span>
+            </button>
+
+            <div className="flex flex-col items-center min-w-[100px]">
+              <div className="text-2xl font-light tracking-tighter">
+                <span className="text-blue-500 font-bold">{currentPage}</span>
+                {showDoublePage && <span className="text-gray-600"> - {currentPage + 1}</span>}
+              </div>
+              <div className="w-full h-1 bg-white/10 rounded-full mt-2 overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 transition-all duration-700 shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                  style={{ width: `${(currentPage / numPages) * 100}%` }}
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={nextPage}
+              disabled={isLastPage}
+              className="w-12 h-12 flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600 disabled:opacity-0 transition-all active:scale-90"
+            >
+              <span className="text-xl">❯</span>
+            </button>
+          </div>
+          <span className="text-[10px] uppercase tracking-widest text-gray-600 font-mono">
+             {numPages} Páginas totales
+          </span>
+        </div>
+
+        <div className="flex-1 hidden sm:flex justify-end">
+           <div className="text-[9px] text-gray-800 border border-gray-800/50 px-2 py-1 rounded">
+             3D ENGINE V1.2
+           </div>
+        </div>
+
       </div>
+
+      {/* ESTILOS DE ANIMACIÓN ADICIONALES */}
+      <style jsx>{`
+        @keyframes pageOpening {
+          from { transform: rotateY(15deg) scale(0.95); opacity: 0.5; }
+          to { transform: rotateY(-3deg) scale(1); opacity: 1; }
+        }
+      `}</style>
     </div>
   )
 }
