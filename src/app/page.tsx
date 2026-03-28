@@ -1,9 +1,9 @@
-import PdfBook from "@/components/PdfBook"
+import FlipBook from "@/components/FlipBook"
 
 export default function Home() {
   return (
-    <main className="min-h-screen flex items-center justify-center">
-      <PdfBook url="/LibroVirtualDemo2.pdf" />
+    <main className="min-h-screen">
+      <FlipBook manifest="/pages/librovirtualdemo2/manifest.json" />
     </main>
   )
 }
