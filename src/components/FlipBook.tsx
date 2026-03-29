@@ -1,14 +1,10 @@
 "use client"
 
 /**
- * FlipBook.tsx — v5.0
- * ─────────────────────────────────────────────────────────────────
- * Mejoras v5:
- * - Lee el aspect ratio real de la primera imagen del PDF
- * - Calcula width/height de StPageFlip a partir del tamaño real
- * - Portada/contraportada centradas solas (página única)
- * - Doble página centrada al navegar
- * ─────────────────────────────────────────────────────────────────
+ * FlipBook.tsx — v6.1
+ * Arquitectura corregida: el div que StPageFlip controla está
+ * completamente aislado de React usando un portal manual.
+ * React nunca toca los hijos de bookRef — solo StPageFlip.
  */
 
 import { useEffect, useRef, useState, useCallback } from "react"
@@ -28,12 +24,18 @@ interface FlipBookProps {
   title?: string
 }
 
-// ─── Utilidad: URL de página ──────────────────────────────────────
+type DeviceMode = "mobile" | "tablet" | "desktop"
+
+function getMode(vw: number): DeviceMode {
+  if (vw >= 1024) return "desktop"
+  if (vw >= 768)  return "tablet"
+  return "mobile"
+}
+
 function pageUrl(basePath: string, format: string, n: number): string {
   return `${basePath}/page-${String(n).padStart(3, "0")}.${format}`
 }
 
-// ─── Utilidad: leer dimensiones reales de una imagen ─────────────
 function getImageSize(src: string): Promise<{ w: number; h: number }> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -45,15 +47,18 @@ function getImageSize(src: string): Promise<{ w: number; h: number }> {
 
 // ─── Componente principal ─────────────────────────────────────────
 export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps) {
-  const [manifest, setManifest]         = useState<Manifest | null>(null)
-  const [error, setError]               = useState<string | null>(null)
-  const [currentPage, setCurrentPage]   = useState(0)
-  const [isReady, setIsReady]           = useState(false)
-  // isCoverView: true cuando estamos en portada o contraportada (página única)
-  const [isCoverView, setIsCoverView]   = useState(true)
+  const [manifest, setManifest]       = useState<Manifest | null>(null)
+  const [error, setError]             = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(0)
+  const [isReady, setIsReady]         = useState(false)
+  const [isCoverView, setIsCoverView] = useState(true)
+  const [mode, setMode]               = useState<DeviceMode>("desktop")
+  const [resizeTick, setResizeTick]   = useState(0)
 
-  const bookRef  = useRef<HTMLDivElement>(null)
+  // wrapRef: el div de React que actúa como contenedor
+  // bookEl:  el div real que StPageFlip controla (creado manualmente, nunca por React)
   const wrapRef  = useRef<HTMLDivElement>(null)
+  const bookEl   = useRef<HTMLDivElement | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const flipRef  = useRef<any>(null)
 
@@ -69,63 +74,89 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
   }, [manifestUrl])
 
   // ── Inicializar StPageFlip ───────────────────────────────────
+  // bookEl se crea aquí dentro, justo antes de usarlo,
+  // para garantizar que wrapRef ya está montado.
   useEffect(() => {
-    if (!manifest || !bookRef.current) return
+    if (!manifest || !wrapRef.current) return
 
     let destroyed = false
 
     const init = async () => {
-      const { PageFlip } = await import("page-flip")
-      if (destroyed || !bookRef.current) return
-
-      const { pages, format, basePath } = manifest
-
-      // 1. Leer el tamaño real de la primera página del PDF
-      const firstUrl = pageUrl(basePath, format, 1)
-      const { w: imgW, h: imgH } = await getImageSize(firstUrl)
-      if (destroyed) return
-
-      const aspectRatio = imgW / imgH   // ej: 0.77 para A4 portrait
-
-      // 2. Calcular dimensiones que encajan en la pantalla
-      //    respetando el aspect ratio real de las páginas
-      const vw        = window.innerWidth
-      const vh        = window.innerHeight
-      const navH      = 112   // altura de la barra de navegación
-      const padding   = 48    // padding vertical total
-      const maxH      = vh - navH - padding
-      const maxW      = vw - padding
-
-      // Empezamos ajustando por alto
-      let pageH = maxH
-      let pageW = Math.round(pageH * aspectRatio)
-
-      // Si la doble página no cabe en ancho, ajustamos por ancho
-      const isDesktop   = vw >= 1024
-      const doubleWidth = isDesktop ? pageW * 2 : pageW
-      if (doubleWidth > maxW) {
-        pageW = Math.round(maxW / (isDesktop ? 2 : 1))
-        pageH = Math.round(pageW / aspectRatio)
+      // 1. Destruir instancia previa y limpiar DOM completamente
+      if (flipRef.current) {
+        try { flipRef.current.destroy() } catch (_) {}
+        flipRef.current = null
       }
 
-      // 3. Inicializar StPageFlip con las dimensiones reales
-      const pf = new PageFlip(bookRef.current, {
+      // Crear el div aislado si no existe, o limpiar si ya existe
+      const initialMode = getMode(window.innerWidth)
+      const initialTransform = initialMode === "desktop" ? "translateX(-25%)" : "translateX(0)"
+
+      if (!bookEl.current) {
+        const div = document.createElement("div")
+        div.style.cssText = `display:flex;align-items:center;justify-content:center;transform:${initialTransform};`
+        wrapRef.current!.appendChild(div)
+        bookEl.current = div
+      } else {
+        bookEl.current.innerHTML = ""
+        // Resetear transform para portada al reinicializar
+        bookEl.current.style.transform = initialTransform
+      }
+
+      const { PageFlip } = await import("page-flip")
+      if (destroyed || !bookEl.current) return
+
+      const { pages, format, basePath } = manifest
+      const currentMode = getMode(window.innerWidth)
+      setMode(currentMode)
+
+      // 2. Leer aspect ratio real
+      const { w: imgW, h: imgH } = await getImageSize(pageUrl(basePath, format, 1))
+      if (destroyed || !bookEl.current) return
+      const aspectRatio = imgW / imgH
+
+      // 3. Calcular dimensiones según modo
+      const vw        = window.innerWidth
+      const vh        = window.innerHeight
+      const navH      = currentMode === "mobile" ? 96 : 112
+      const maxH      = vh - navH - 32
+      const isDesktop = currentMode === "desktop"
+
+      let pageW: number
+      let pageH: number
+
+      if (isDesktop) {
+        pageH = maxH
+        pageW = Math.round(pageH * aspectRatio)
+        if (pageW * 2 > vw - 48) {
+          pageW = Math.round((vw - 48) / 2)
+          pageH = Math.round(pageW / aspectRatio)
+        }
+      } else {
+        const widthFraction = currentMode === "mobile" ? 0.92 : 0.78
+        pageW = Math.round(vw * widthFraction)
+        pageH = Math.round(pageW / aspectRatio)
+        if (pageH > maxH) {
+          pageH = maxH
+          pageW = Math.round(pageH * aspectRatio)
+        }
+      }
+
+      // 4. Crear instancia PageFlip en el div aislado
+      const pf = new PageFlip(bookEl.current!, {
         width:               pageW,
         height:              pageH,
         size:                "fixed" as SizeType,
         showCover:           true,
         drawShadow:          true,
-        flippingTime:        700,
+        flippingTime:        isDesktop ? 700 : 500,
         usePortrait:         !isDesktop,
-        autoSize:            false,   // nosotros controlamos el tamaño
+        autoSize:            false,
         maxShadowOpacity:    0.5,
-        mobileScrollSupport: false,
+        mobileScrollSupport: false,  // evita conflicto touch/scroll
       })
 
-      // 4. Crear páginas HTML con portada/contraportada hard
-      const container = bookRef.current!
-      container.querySelectorAll(".pf-page").forEach(el => el.remove())
-
+      // 5. Crear páginas HTML dentro del div aislado
       Array.from({ length: pages }, (_, i) => {
         const n       = i + 1
         const isFirst = n === 1
@@ -133,42 +164,47 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
 
         const div = document.createElement("div")
         div.className = "pf-page"
-        // Portada y contraportada = tapa dura → página única
         if (isFirst || isLast) div.setAttribute("data-density", "hard")
 
         const img = document.createElement("img")
-        img.src            = pageUrl(basePath, format, n)
-        img.alt            = isFirst ? "Portada" : isLast ? "Contraportada" : `Página ${n}`
-        img.draggable      = false
-        // object-fit: fill respeta exactamente el tamaño que StPageFlip asigna
-        img.style.cssText  = "width:100%;height:100%;object-fit:fill;display:block;"
+        img.src           = pageUrl(basePath, format, n)
+        img.alt           = isFirst ? "Portada" : isLast ? "Contraportada" : `Página ${n}`
+        img.draggable     = false
+        img.style.cssText = "width:100%;height:100%;object-fit:fill;display:block;"
 
         div.appendChild(img)
-        container.appendChild(div)
+        bookEl.current!.appendChild(div)
       })
 
-      pf.loadFromHTML(container.querySelectorAll(".pf-page"))
+      pf.loadFromHTML(bookEl.current!.querySelectorAll(".pf-page"))
 
-      // 5. Eventos
+      // 6. Eventos
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pf.on("flip", (e: any) => {
         const idx     = e.data as number
-        const total   = manifest.pages
-        const isCover = idx === 0 || idx >= total - 1
+        const isCover = idx === 0 || idx >= pages - 1
         setCurrentPage(idx)
         setIsCoverView(isCover)
       })
 
-      // Actualizar isCoverView también durante la animación de flip
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      pf.on("changeState", (e: any) => {
+      pf.on("changeState", (_e: any) => {
         const idx     = pf.getCurrentPageIndex() as number
-        const total   = manifest.pages
-        const isCover = idx === 0 || idx >= total - 1
+        const isCover = idx === 0 || idx >= pages - 1
         setIsCoverView(isCover)
       })
 
       flipRef.current = pf
+
+      // Fade in suave
+      if (bookEl.current) {
+        bookEl.current.style.opacity    = "0"
+        bookEl.current.style.transition = "opacity 0.4s ease"
+        requestAnimationFrame(() => {
+          if (bookEl.current) bookEl.current.style.opacity = "1"
+        })
+      }
+
       setIsReady(true)
     }
 
@@ -179,8 +215,44 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
       if (flipRef.current) {
         try { flipRef.current.destroy() } catch (_) {}
         flipRef.current = null
-        setIsReady(false)
       }
+      // Limpiar el div aislado al desmontar
+      if (bookEl.current) {
+        bookEl.current.remove()
+        bookEl.current = null
+      }
+      setIsReady(false)
+    }
+  }, [manifest, resizeTick])
+
+  // ── Resize: reinicializar solo si cambia el modo ─────────────
+  useEffect(() => {
+    if (!manifest) return
+
+    let lastMode = getMode(window.innerWidth)
+    let timer: ReturnType<typeof setTimeout>
+
+    const handleResize = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        const newMode = getMode(window.innerWidth)
+        if (newMode !== lastMode) {
+          lastMode = newMode
+          if (flipRef.current) {
+            try { flipRef.current.destroy() } catch (_) {}
+            flipRef.current = null
+          }
+          if (bookEl.current) bookEl.current.innerHTML = ""
+          setIsReady(false)
+          setResizeTick(t => t + 1)
+        }
+      }, 300)
+    }
+
+    window.addEventListener("resize", handleResize)
+    return () => {
+      window.removeEventListener("resize", handleResize)
+      clearTimeout(timer)
     }
   }, [manifest])
 
@@ -193,33 +265,44 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     setIsCoverView(true)
   }, [])
 
-  // ── Teclado ──────────────────────────────────────────────────
+  // ── Teclado (solo desktop) ───────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (mode !== "desktop") return
       if (e.key === "ArrowRight") goNext()
       if (e.key === "ArrowLeft")  goPrev()
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [goNext, goPrev])
+  }, [goNext, goPrev, mode])
+
+  // ── Centrado de portada en desktop ───────────────────────────
+  useEffect(() => {
+    if (!bookEl.current || mode !== "desktop") return
+    const transform = isCoverView
+      ? (currentPage === 0 ? "translateX(-25%)" : "translateX(25%)")
+      : "translateX(0)"
+    bookEl.current.style.transform  = transform
+    bookEl.current.style.transition = "transform 0.5s cubic-bezier(0.4,0,0.2,1), opacity 0.4s ease"
+  }, [isCoverView, currentPage, mode])
 
   // ── UI derivada ──────────────────────────────────────────────
-  const totalPages  = manifest?.pages ?? 0
-  const displayPage = currentPage + 1
-  const isFirstPage = currentPage === 0
-  const isLastPage  = currentPage >= totalPages - 1
-  const progress    = totalPages > 1 ? (currentPage / (totalPages - 1)) * 100 : 0
+  const totalPages       = manifest?.pages ?? 0
+  const displayPage      = currentPage + 1
+  const isFirstPage      = currentPage === 0
+  const isLastPage       = currentPage >= totalPages - 1
+  const progress         = totalPages > 1 ? (currentPage / (totalPages - 1)) * 100 : 0
+  const isMobile         = mode === "mobile"
+  const isMobileOrTablet = mode === "mobile" || mode === "tablet"
 
-  // ── Error ────────────────────────────────────────────────────
+  // ── Error / Carga ────────────────────────────────────────────
   if (error) return (
     <div className="h-screen flex flex-col items-center justify-center bg-[#0a0a0a] gap-4 p-8">
       <div className="text-red-500 font-mono text-sm">⚠ Error al cargar el visor</div>
       <div className="text-gray-600 text-xs max-w-sm text-center">{error}</div>
       <div className="text-gray-700 text-xs mt-2 text-center">
-        Asegúrate de correr primero:<br />
-        <code className="text-gray-500 mt-1 block">
-          node scripts/convert-pdf.mjs public/TuArchivo.pdf
-        </code>
+        Asegúrate de correr:<br />
+        <code className="text-gray-500 mt-1 block">node scripts/convert-pdf.mjs public/TuArchivo.pdf</code>
       </div>
     </div>
   )
@@ -239,103 +322,105 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     >
 
       {/* ── ÁREA DEL LIBRO ── */}
-      {/*
-        El wrapper centra el libro tanto en vista de portada (mitad)
-        como en vista de doble página (completo).
-        StPageFlip controla el ancho real del canvas — nosotros solo
-        nos aseguramos de que esté centrado verticalmente.
-      */}
+      {/* wrapRef es el único div que React controla.
+          bookEl es un div hijo creado con JS puro — React no lo toca nunca. */}
       <div
         ref={wrapRef}
         className="flex-1 flex items-center justify-center overflow-hidden"
-        style={{
-          // Transición suave cuando el libro cambia de ancho
-          // (portada → doble página y viceversa)
-          transition: "padding 0.4s ease",
-        }}
       >
         {!isReady && (
           <div className="absolute text-blue-500 font-mono text-sm tracking-widest animate-pulse z-10">
             PREPARANDO LIBRO...
           </div>
         )}
-        <div
-          ref={bookRef}
-          style={{
-            opacity:    isReady ? 1 : 0,
-            transition: "opacity 0.4s ease, transform 0.5s cubic-bezier(0.4,0,0.2,1)",
-            // Cuando estamos en portada o contraportada, StPageFlip centra la página
-            // en la mitad derecha o izquierda del canvas doble.
-            // Compensamos con translateX para que la página quede visualmente centrada.
-            transform: isCoverView
-              ? (isLastPage ? "translateX(25%)" : "translateX(-25%)")
-              : "translateX(0)",
-          }}
-        />
       </div>
 
       {/* ── BARRA DE NAVEGACIÓN ── */}
       <nav
-        className="min-h-[110px] h-28 bg-black/80 backdrop-blur-2xl border-t border-white/5 flex items-center justify-between px-6 md:px-16 z-50"
+        className={`
+          bg-black/85 backdrop-blur-2xl border-t border-white/5
+          flex items-center justify-between z-50
+          ${isMobile ? "h-24 px-4" : "h-28 px-6 md:px-16"}
+        `}
         aria-label="Navegación del libro"
       >
-        <div className="flex-1 hidden sm:flex">
-          <button
-            onClick={goFirst}
-            disabled={isFirstPage}
-            className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/5 disabled:opacity-30 transition-all text-[10px] uppercase tracking-[0.2em] text-gray-500 hover:text-white"
-          >
-            Portada
-          </button>
-        </div>
+        {/* Portada — tablet y desktop */}
+        {!isMobile && (
+          <div className="flex-1 flex">
+            <button
+              onClick={goFirst}
+              disabled={isFirstPage}
+              className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/5 disabled:opacity-30 transition-all text-[10px] uppercase tracking-[0.2em] text-gray-500 hover:text-white"
+            >
+              Portada
+            </button>
+          </div>
+        )}
 
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-8 md:gap-12">
+        {/* Controles centrales */}
+        <div className="flex flex-col items-center gap-2 flex-1">
+          <div className={`flex items-center ${isMobile ? "gap-6 w-full justify-between px-2" : "gap-8 md:gap-12"}`}>
+
             <button
               onClick={goPrev}
               disabled={isFirstPage}
-              className="w-12 h-12 flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600 disabled:opacity-0 transition-all active:scale-90"
+              className={`flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600 disabled:opacity-0 transition-all active:scale-90 ${isMobile ? "w-14 h-14" : "w-12 h-12"}`}
               aria-label="Página anterior"
             >
-              <span className="text-xl">❮</span>
+              <span className={isMobile ? "text-2xl" : "text-xl"}>❮</span>
             </button>
 
-            <div className="flex flex-col items-center min-w-[110px]">
-              <div className="text-2xl font-light tracking-tighter">
+            <div className="flex flex-col items-center min-w-[90px]">
+              <div className={`font-light tracking-tighter ${isMobile ? "text-xl" : "text-2xl"}`}>
                 <span className="text-blue-500 font-bold">{displayPage}</span>
                 <span className="text-gray-600"> / {totalPages}</span>
               </div>
-              <div className="w-full h-1 bg-white/10 rounded-full mt-2 overflow-hidden">
+              <div className="w-full h-1 bg-white/10 rounded-full mt-1.5 overflow-hidden">
                 <div
-                  className="h-full bg-blue-500 transition-all duration-500 shadow-[0_0_8px_rgba(59,130,246,0.5)]"
+                  className="h-full bg-blue-500 transition-all duration-500"
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              {/* Indicador de vista actual */}
               <span className="text-[9px] text-gray-700 mt-1 font-mono uppercase tracking-wider">
-                {isCoverView ? "portada" : "doble página"}
+                {isMobileOrTablet ? "desliza para pasar" : isCoverView ? "portada" : "doble página"}
               </span>
             </div>
 
             <button
               onClick={goNext}
               disabled={isLastPage}
-              className="w-12 h-12 flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600 disabled:opacity-0 transition-all active:scale-90"
+              className={`flex items-center justify-center rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600 disabled:opacity-0 transition-all active:scale-90 ${isMobile ? "w-14 h-14" : "w-12 h-12"}`}
               aria-label="Página siguiente"
             >
-              <span className="text-xl">❯</span>
+              <span className={isMobile ? "text-2xl" : "text-xl"}>❯</span>
             </button>
           </div>
-          <span className="text-[10px] uppercase tracking-widest text-gray-600 font-mono">
-            {totalPages} páginas · arrastra para voltear
-          </span>
+
+          {/* Dots de progreso — móvil y tablet */}
+          {isMobileOrTablet && totalPages > 0 && (
+            <div className="flex gap-1.5 mt-1">
+              {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                const dotPage = Math.round((i / Math.max(Math.min(totalPages, 7) - 1, 1)) * (totalPages - 1))
+                const isActive = Math.abs(dotPage - currentPage) < Math.ceil(totalPages / 7)
+                return (
+                  <div
+                    key={i}
+                    className={`rounded-full transition-all duration-300 ${isActive ? "w-4 h-1.5 bg-blue-500" : "w-1.5 h-1.5 bg-white/20"}`}
+                  />
+                )
+              })}
+            </div>
+          )}
         </div>
 
-        <div className="flex-1 hidden sm:flex justify-end">
-          <div className="text-[9px] text-gray-800 border border-gray-800/50 px-2 py-1 rounded">
-            FLIP ENGINE V5.0
+        {/* Badge — solo desktop */}
+        {!isMobileOrTablet && (
+          <div className="flex-1 flex justify-end">
+            <div className="text-[9px] text-gray-800 border border-gray-800/50 px-2 py-1 rounded">
+              FLIP ENGINE V6.1
+            </div>
           </div>
-        </div>
+        )}
       </nav>
     </div>
   )
