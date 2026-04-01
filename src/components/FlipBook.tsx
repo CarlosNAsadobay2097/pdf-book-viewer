@@ -413,14 +413,20 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     const handler = () => {
       const isFull = !!document.fullscreenElement
       setIsFullscreen(isFull)
-      // Guardar página actual antes de reinicializar
       const savedPage = flipRef.current ? flipRef.current.getCurrentPageIndex() : 0
+
+      // Resetear translate Y zoom antes de reinicializar
+      if (bookEl.current) {
+        bookEl.current.style.translate  = "0px 0px"
+        bookEl.current.style.transform  = ""
+        bookEl.current.style.transition = "none"
+      }
+
       setTimeout(() => {
         if (bookEl.current) bookEl.current.innerHTML = ""
         setIsReady(false)
         setZoomIdx(0)
         setResizeTick(t => t + 1)
-        // Restaurar página después de reinicializar
         setTimeout(() => {
           if (flipRef.current && savedPage > 0) {
             flipRef.current.turnToPage(savedPage)
@@ -541,11 +547,20 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
               e.preventDefault()
             }}
             onMouseMove={(e) => {
-              if (!isPanning.current || !bookEl.current) return
-              const dx = panStart.current.scrollX + (e.clientX - panStart.current.x)
-              const dy = panStart.current.scrollY + (e.clientY - panStart.current.y)
-              // Usar translate en vez de margin para no romper el layout
-              const scale = ZOOM_STEPS[zoomIdx]
+              if (!isPanning.current || !bookEl.current || !wrapRef.current) return
+              const scale     = ZOOM_STEPS[zoomIdx]
+              const bookW     = bookEl.current.offsetWidth
+              const bookH     = bookEl.current.offsetHeight
+              const wrapW     = wrapRef.current.offsetWidth
+              const wrapH     = wrapRef.current.offsetHeight
+              // Límite: solo podemos mover hasta que el borde del libro
+              // llegue al borde del contenedor (nunca más allá)
+              const maxX = Math.max(0, (bookW * scale - wrapW) / 2)
+              const maxY = Math.max(0, (bookH * scale - wrapH) / 2)
+              const rawDx = panStart.current.scrollX + (e.clientX - panStart.current.x)
+              const rawDy = panStart.current.scrollY + (e.clientY - panStart.current.y)
+              const dx = Math.min(maxX, Math.max(-maxX, rawDx))
+              const dy = Math.min(maxY, Math.max(-maxY, rawDy))
               bookEl.current.style.transform = `scale(${scale})`
               bookEl.current.style.translate = `${dx}px ${dy}px`
             }}
@@ -561,11 +576,19 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
               }
             }}
             onTouchMove={(e) => {
-              if (!isPanning.current || !bookEl.current) return
+              if (!isPanning.current || !bookEl.current || !wrapRef.current) return
               e.preventDefault()
-              const dx = panStart.current.scrollX + (e.touches[0].clientX - panStart.current.x)
-              const dy = panStart.current.scrollY + (e.touches[0].clientY - panStart.current.y)
-              const scale = ZOOM_STEPS[zoomIdx]
+              const scale     = ZOOM_STEPS[zoomIdx]
+              const bookW     = bookEl.current.offsetWidth
+              const bookH     = bookEl.current.offsetHeight
+              const wrapW     = wrapRef.current.offsetWidth
+              const wrapH     = wrapRef.current.offsetHeight
+              const maxX = Math.max(0, (bookW * scale - wrapW) / 2)
+              const maxY = Math.max(0, (bookH * scale - wrapH) / 2)
+              const rawDx = panStart.current.scrollX + (e.touches[0].clientX - panStart.current.x)
+              const rawDy = panStart.current.scrollY + (e.touches[0].clientY - panStart.current.y)
+              const dx = Math.min(maxX, Math.max(-maxX, rawDx))
+              const dy = Math.min(maxY, Math.max(-maxY, rawDy))
               bookEl.current.style.transform = `scale(${scale})`
               bookEl.current.style.translate = `${dx}px ${dy}px`
             }}
@@ -618,7 +641,13 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
             {/* Contador */}
             <div className="flex flex-col items-center min-w-[80px]">
               <div className={`font-light tracking-tighter ${isMobile ? "text-xl" : "text-2xl"}`}>
-                <span className="text-blue-500 font-bold">{displayPage}</span>
+                <span className="text-blue-500 font-bold">
+                  {/* En desktop doble página mostrar "2–3", en portada/contraportada solo el número */}
+                  {mode === "desktop" && !isCoverView && currentPage + 2 <= totalPages
+                    ? `${displayPage}–${displayPage + 1}`
+                    : displayPage
+                  }
+                </span>
                 <span className="text-gray-600"> / {totalPages}</span>
               </div>
               <div className="w-full h-1 bg-white/10 rounded-full mt-1.5 overflow-hidden">
