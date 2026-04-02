@@ -314,7 +314,7 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     const scale = ZOOM_STEPS[idx]
 
     if (idx === 0) {
-      // Sin zoom: volver al centrado normal
+      // Sin zoom: restaurar translateX para centrado de portada/contraportada
       const isCover_ = flipRef.current
         ? (flipRef.current.getCurrentPageIndex() === 0 ||
            flipRef.current.getCurrentPageIndex() >= (manifest?.pages ?? 1) - 1)
@@ -322,15 +322,14 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
       const baseX = mode === "desktop" && isCover_
         ? (flipRef.current?.getCurrentPageIndex() === 0 ? "-25%" : "25%")
         : "0"
+      bookEl.current.style.translate       = "0px 0px"
       bookEl.current.style.transform       = `translateX(${baseX}) scale(1)`
       bookEl.current.style.transformOrigin = "center center"
       bookEl.current.style.margin          = "auto"
-      bookEl.current.style.marginLeft      = "auto"
-      bookEl.current.style.marginTop       = "auto"
-      bookEl.current.style.translate       = "0px 0px"
     } else {
-      // Con zoom: centrado, pan libre con translate
-      bookEl.current.style.transform       = `scale(${scale})`
+      // Con zoom: eliminar translateX de portada y centrar limpio
+      // El pan se maneja con translate independiente
+      bookEl.current.style.transform       = `translateX(0) scale(${scale})`
       bookEl.current.style.transformOrigin = "center center"
       bookEl.current.style.translate       = "0px 0px"
       bookEl.current.style.margin          = "auto"
@@ -395,6 +394,8 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     const baseX = isCoverView
       ? (currentPage === 0 ? "-25%" : "25%")
       : "0"
+    // Resetear translate antes de aplicar translateX para evitar doble offset
+    bookEl.current.style.translate       = "0px 0px"
     bookEl.current.style.transform       = `translateX(${baseX}) scale(1)`
     bookEl.current.style.transformOrigin = "center center"
     bookEl.current.style.transition      = "transform 0.5s cubic-bezier(0.4,0,0.2,1), opacity 0.4s ease"
@@ -555,13 +556,15 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
               const wrapH     = wrapRef.current.offsetHeight
               // Límite: solo podemos mover hasta que el borde del libro
               // llegue al borde del contenedor (nunca más allá)
-              const maxX = Math.max(0, (bookW * scale - wrapW) / 2)
-              const maxY = Math.max(0, (bookH * scale - wrapH) / 2)
+              // PADDING extra del 15% para que no se sienta claustrofóbico
+              const EXTRA = 0.15
+              const maxX = Math.max(0, (bookW * scale - wrapW) / 2) + bookW * EXTRA
+              const maxY = Math.max(0, (bookH * scale - wrapH) / 2) + bookH * EXTRA
               const rawDx = panStart.current.scrollX + (e.clientX - panStart.current.x)
               const rawDy = panStart.current.scrollY + (e.clientY - panStart.current.y)
               const dx = Math.min(maxX, Math.max(-maxX, rawDx))
               const dy = Math.min(maxY, Math.max(-maxY, rawDy))
-              bookEl.current.style.transform = `scale(${scale})`
+              bookEl.current.style.transform = `translateX(0) scale(${scale})`
               bookEl.current.style.translate = `${dx}px ${dy}px`
             }}
             onMouseUp={() => { isPanning.current = false }}
@@ -583,13 +586,14 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
               const bookH     = bookEl.current.offsetHeight
               const wrapW     = wrapRef.current.offsetWidth
               const wrapH     = wrapRef.current.offsetHeight
-              const maxX = Math.max(0, (bookW * scale - wrapW) / 2)
-              const maxY = Math.max(0, (bookH * scale - wrapH) / 2)
+              const EXTRA = 0.15
+              const maxX = Math.max(0, (bookW * scale - wrapW) / 2) + bookW * EXTRA
+              const maxY = Math.max(0, (bookH * scale - wrapH) / 2) + bookH * EXTRA
               const rawDx = panStart.current.scrollX + (e.touches[0].clientX - panStart.current.x)
               const rawDy = panStart.current.scrollY + (e.touches[0].clientY - panStart.current.y)
               const dx = Math.min(maxX, Math.max(-maxX, rawDx))
               const dy = Math.min(maxY, Math.max(-maxY, rawDy))
-              bookEl.current.style.transform = `scale(${scale})`
+              bookEl.current.style.transform = `translateX(0) scale(${scale})`
               bookEl.current.style.translate = `${dx}px ${dy}px`
             }}
             onTouchEnd={() => { isPanning.current = false }}
