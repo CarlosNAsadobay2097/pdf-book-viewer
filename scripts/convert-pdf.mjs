@@ -39,7 +39,8 @@ function fail(msg) {
 
 // ─── Parámetros ───────────────────────────────────────────────────
 const pdfPath = args.find(a => !a.startsWith("--"))
-if (!pdfPath)               fail("Debes indicar la ruta al PDF.\n   Ejemplo: node scripts/convert-pdf.mjs public/MiLibro.pdf")
+if (!pdfPath)               fail("Debes indicar la ruta al PDF.\n   Ejemplo: node scripts/convert-pdf.mjs public\ fabrica de historias.pdf.pdf"
+)
 if (!fs.existsSync(pdfPath)) fail(`No se encontró el archivo: "${pdfPath}"`)
 
 const pdfName = path.basename(pdfPath, path.extname(pdfPath))
@@ -92,7 +93,33 @@ try {
 
 if (pageCount === 0) fail("No se generó ninguna página. ¿Es un PDF válido?")
 
-// ─── Generar manifest.json ────────────────────────────────────────
+// ─── Generar manifest.json (preservando interactividad existente) ─
+const manifestPath = path.join(outDir, "manifest.json")
+
+// Campos armados a mano en el editor (/editor): si ya existe un manifest
+// de una conversión anterior, los rescatamos para no perder todo el
+// trabajo de overlays/índice/etc. al volver a convertir el mismo PDF.
+let previousInteractiveFields = {}
+if (fs.existsSync(manifestPath)) {
+  try {
+    const previous = JSON.parse(fs.readFileSync(manifestPath, "utf-8"))
+    const { overlays, revealImages, revealCardBg, tableOfContents } = previous
+
+    previousInteractiveFields = { overlays, revealImages, revealCardBg, tableOfContents }
+
+    if (typeof previous.pages === "number" && previous.pages !== pageCount) {
+      console.log(`\n⚠️  Aviso: el PDF anterior tenía ${previous.pages} páginas y el nuevo tiene ${pageCount}.`)
+      console.log(`   Se conservaron los overlays existentes, pero puede que ahora apunten`)
+      console.log(`   a la página equivocada si se agregó/quitó una hoja en el medio.`)
+      console.log(`   Revisalos en /editor antes de publicar.\n`)
+    } else {
+      console.log(`\n♻️  Se conservaron los overlays/índice del manifest anterior.\n`)
+    }
+  } catch {
+    console.log(`\n⚠️  No se pudo leer el manifest anterior, se genera uno nuevo sin overlays.\n`)
+  }
+}
+
 const manifest = {
   name:      pdfName,
   source:    path.basename(pdfPath),
@@ -102,9 +129,9 @@ const manifest = {
   quality:   QUALITY,
   generated: new Date().toISOString(),
   basePath:  outDir.replace(/^public/, ""),
+  ...previousInteractiveFields,
 }
 
-const manifestPath = path.join(outDir, "manifest.json")
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
 
 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)

@@ -6,5 +6,156 @@
   "scale": 2,
   "quality": 85,
   "generated": "2026-03-28T00:39:25.293Z",
-  "basePath": "/pages/librovirtualdemo2"
+  "basePath": "/pages/librovirtualdemo2",
+  "overlays": {
+    "1": [
+      {
+        "id": "0fa33fe2-37b9-4ba2-9fc5-6e2fd7d4ce8e",
+        "type": "image",
+        "x": 11.918082009073398,
+        "y": 25.827252835832955,
+        "action": "none",
+        "w": 75.26358475263585,
+        "h": 52.919708029197075,
+        "visible": true,
+        "clickable": false,
+        "src": "/pages/librovirtualdemo2/assets/images/1792611625082-Colibri-Aleteando.gif"
+      }
+    ],
+    "2": [
+      {
+        "id": "f0fa391d-b5c3-4e12-9dae-38e912ab1074",
+        "type": "button",
+        "x": 83.28873262304846,
+        "y": 85.8029182229889,
+        "action": "none",
+        "w": 12,
+        "h": 12,
+        "visible": true,
+        "clickable": true,
+        "icon": "🔊",
+        "src": "/pages/librovirtualdemo2/assets/images/1792611869207-Boton_Audio_2.png",
+        "audioSrc": "/pages/librovirtualdemo2/assets/audio/1792611908298-Rio_Arrollo.mp3"
+      },
+      {
+        "id": "c2d5ede4-970c-4652-8cad-0e3b29ceb892",
+        "type": "button",
+        "x": 14.700730719028787,
+        "y": 60.1995166490838,
+        "action": "timedSwap",
+        "w": 39.57826439578264,
+        "h": 6.082725060827251,
+        "visible": true,
+        "clickable": true,
+        "icon": "🔊",
+        "src": "/pages/librovirtualdemo2/assets/images/1792611985604-Boton_Precionar.png",
+        "durationMs": 5000,
+        "targetIds": [
+          "34d0e4f3-dcd4-45f1-a6a0-7475dbc8eb31"
+        ]
+      },
+      {
+        "id": "34d0e4f3-dcd4-45f1-a6a0-7475dbc8eb31",
+        "type": "image",
+        "x": 57.06165372503548,
+        "y": 51.99270132394312,
+        "action": "none",
+        "w": 35.19870235198702,
+        "h": 28.832116788321166,
+        "visible": false,
+        "clickable": false,
+        "src": "/pages/librovirtualdemo2/assets/images/1792612029849-Colibri-Aleteando.gif"
+      }
+    ],
+    "3": [
+      {
+        "id": "6ddd6635-234e-4f8f-a55b-4c1b9116aabc",
+        "type": "image",
+        "x": 53.05595552640915,
+        "y": 69.58546882128194,
+        "w": 43.14679643146796,
+        "h": 24.574209245742093,
+        "visible": false,
+        "clickable": false,
+        "action": "none",
+        "src": "/pages/librovirtualdemo2/assets/images/1792612361826-Pastores.gif"
+      },
+      {
+        "id": "f13a0db9-cc93-4435-8aea-8987ed85001c",
+        "type": "button",
+        "x": 50.73561966177515,
+        "y": 69.38929499790905,
+        "action": "timedSwap",
+        "w": 48.337388483373886,
+        "h": 25.304136253041364,
+        "visible": true,
+        "clickable": true,
+        "icon": "🔊",
+        "src": "/pages/librovirtualdemo2/assets/images/1792612342571-Pastores_00000.png",
+        "targetIds": [
+          "6ddd6635-234e-4f8f-a55b-4c1b9116aabc"
+        ]
+      },
+      {
+        "id": "215abaaf-5d7a-48d8-9925-c7c2b36a3875",
+        "type": "button",
+        "x": 3.0721721664639086,
+        "y": 79.67396385768326,
+        "action": "link",
+        "w": 33.73884833738848,
+        "h": 5.7177615571776155,
+        "visible": true,
+        "clickable": true,
+        "icon": "🔊",
+        "src": "/pages/librovirtualdemo2/assets/images/1792613096477-Boton_Link__2.png",
+        "linkUrl": "https://fabrica-de-historias-unae.netlify.app/"
+      },
+      {
+        "id": "4eb1aa62-dbcf-4633-95ed-eeb4f391609e",
+        "type": "image",
+        "x": -8.419307266321978,
+        "y": 14.776150965632606,
+        "action": "none",
+        "w": 54.6634175964999,
+        "h": 32.481751824817515,
+        "visible": true,
+        "clickable": false,
+        "src": "/pages/librovirtualdemo2/assets/images/1792615742772-Video_1.png"
+      },
+      {
+        "id": "2422c52b-bb91-4250-932b-9855ab67ae54",
+        "type": "video",
+        "x": -0.30900718521897697,
+        "y": 20.250603520377133,
+        "action": "none",
+        "w": 37.30737294787232,
+        "h": 21.776155717761558,
+        "visible": true,
+        "clickable": false,
+        "rotate": 0,
+        "videoId": "VmnHa6wlr5k"
+      }
+    ],
+    "4": [
+      {
+        "id": "f36173d9-05a6-4861-839d-427c05152d89",
+        "type": "reveal",
+        "x": 28.949712179389696,
+        "y": 36.289539940455825,
+        "action": "none",
+        "w": 43.79562043795621,
+        "h": 32.72506082725061,
+        "visible": true,
+        "clickable": true,
+        "name": "Flores y Panel de Info",
+        "role": "Recuadro de texto",
+        "bio": "Texto descriptivo ",
+        "avatarColor": "#00800f"
+      }
+    ]
+  },
+  "revealImages": {
+    "4": "/pages/librovirtualdemo2/assets/images/1792613793635-Mascara.webp"
+  },
+  "downloadPdfUrl": "/pages/librovirtualdemo2/assets/downloads/1792615985334-Libro_Virtual_Demo2.pdf"
 }

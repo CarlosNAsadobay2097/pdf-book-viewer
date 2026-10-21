@@ -1,0 +1,368 @@
+==============================================================================
+ LIBRO VIRTUAL DEMO - VISOR DE LIBROS PDF (PDF BOOK VIEWER)
+ Guia de uso y modificacion
+==============================================================================
+
+Este documento explica como funciona el proyecto, como usarlo dia a dia
+(convertir un PDF, editarlo, publicarlo) y como modificar el codigo.
+
+
+------------------------------------------------------------------------------
+ 1. QUE ES
+------------------------------------------------------------------------------
+
+Una aplicacion web que muestra un PDF como un libro con paginas que se
+voltean, y permite agregar interacciones encima de cada pagina (imagenes,
+botones con sonido, videos de YouTube, "puntos de revelado" tipo equipo,
+indice, boton para descargar el PDF).
+
+Tiene dos partes:
+
+  - VISOR (ruta "/"): lo que ven los lectores.
+  - EDITOR (ruta "/editor"): herramienta para agregar y posicionar las
+    interacciones. Solo funciona en LOCAL (ver seccion 9).
+
+Como funciona por dentro: un script convierte cada pagina del PDF en una
+imagen WebP y genera un archivo "manifest.json" que describe el libro. El
+visor lee ese manifest y arma el libro con las imagenes. El editor modifica
+ese mismo manifest.json.
+
+
+------------------------------------------------------------------------------
+ 2. TECNOLOGIAS
+------------------------------------------------------------------------------
+
+  - Next.js 16 (App Router) + React 19 + TypeScript
+  - Tailwind CSS 4
+  - page-flip: animacion de voltear paginas
+  - react-rnd: arrastrar y redimensionar overlays en el editor
+  - pdfjs-dist: lectura de PDF en el navegador (worker en public/)
+  - framer-motion y Font Awesome: animaciones e iconos
+  - sharp + pdf-to-img (solo desarrollo): convierten el PDF a WebP
+  - Hosting: Netlify, desplegando desde GitHub (rama main)
+
+
+------------------------------------------------------------------------------
+ 3. ESTRUCTURA DE CARPETAS
+------------------------------------------------------------------------------
+
+  src/app/page.tsx                 Pagina principal. Carga el visor con la
+                                   ruta del manifest del libro.
+  src/app/layout.tsx               Titulo de la pestana (metadata), fuentes.
+  src/app/editor/page.tsx          Editor de overlays (/editor).
+  src/app/api/manifest/route.ts    API: lee (GET) y guarda (PUT) manifest.json.
+  src/app/api/upload/route.ts      API: sube imagenes, audios y PDFs.
+  src/components/FlipBook.tsx      El visor (zoom, pantalla completa, indice,
+                                   boton de descarga, modo movil/tablet/PC).
+  src/components/useFlip.ts        Ayuda para la libreria page-flip.
+  src/components/AssetDropzone.tsx Caja "arrastra un archivo" del editor.
+  src/lib/overlay-render.ts        Dibuja los overlays sobre cada pagina.
+  src/types/overlay.ts             Tipos: Manifest y PageOverlay.
+  scripts/convert-pdf.mjs          Convierte un PDF a imagenes + manifest.
+  public/pages/<libro>/            Paginas (page-001.webp...) y manifest.json.
+  public/pages/<libro>/assets/     Archivos subidos desde el editor:
+      images/     imagenes de overlays
+      audio/      sonidos de botones
+      downloads/  PDF descargable para los lectores
+  public/sounds/                   Sonidos del visor (voltear pagina).
+  public/pdf.worker.min.mjs        Worker de pdf.js (no borrar).
+  next.config.ts                   Configuracion de Next.js.
+  .gitignore                       Que archivos NO se suben a GitHub.
+
+
+------------------------------------------------------------------------------
+ 4. COMANDOS BASICOS
+------------------------------------------------------------------------------
+
+Abrir una terminal en la carpeta del proyecto y usar:
+
+  npm install        Instala dependencias (solo la primera vez o si cambia
+                     package.json).
+  npm run dev        Servidor de desarrollo en http://localhost:3000
+                     - Visor:  http://localhost:3000/
+                     - Editor: http://localhost:3000/editor
+  npm run build      Compila para produccion (Netlify lo ejecuta solo).
+  npm run start      Sirve la version compilada (para probar en local).
+  npm run lint       Revisa el codigo con ESLint.
+
+Nota: si cambias next.config.ts, reinicia "npm run dev".
+
+
+------------------------------------------------------------------------------
+ 5. FLUJO DE TRABAJO COMPLETO (PASO A PASO)
+------------------------------------------------------------------------------
+
+PASO 1 - Convertir el PDF a imagenes
+
+  La demo ya esta convertida; no necesitas ejecutar este paso para usarla.
+  Para convertir otro libro, coloca su PDF fuente en public/ y ejecuta:
+
+    node scripts/convert-pdf.mjs public/mi-libro.pdf
+
+  Opciones:
+    --out <carpeta>   Carpeta de salida (por defecto public/pages/<nombre>)
+    --scale <n>       Escala de render (por defecto 2)
+    --quality <1-100> Calidad WebP (por defecto 85)
+    --format webp|png Formato (por defecto webp)
+
+  Ejemplo:
+    node scripts/convert-pdf.mjs public/mi-libro.pdf --scale 2 --quality 88
+
+  Resultado: public/pages/<nombre>/page-001.webp, page-002.webp, ... y un
+  manifest.json.
+
+  Si ya existia un manifest.json, el script CONSERVA los overlays, las
+  imagenes de revelado, la textura de tarjetas y el indice. Si el numero de
+  paginas cambio, avisa: revisa los overlays en el editor porque pueden
+  quedar en la pagina equivocada.
+
+  IMPORTANTE: el script NO conserva "downloadPdfUrl" (el PDF descargable).
+  Despues de reconvertir un libro, vuelve a subir/verificar ese PDF en el
+  editor (ver paso 2) o agrega "downloadPdfUrl" de nuevo al manifest.
+
+PASO 2 - Editar interacciones (solo en local)
+
+  1. Ejecuta "npm run dev" y abre http://localhost:3000/editor
+  2. Navega entre paginas con las flechas del panel izquierdo.
+  3. Agrega elementos con los botones:
+       + Imagen / WebP / GIF
+       + Boton interactivo
+       + Punto de revelado (equipo)
+       (y video de YouTube, segun el tipo de overlay)
+  4. Arrastra y redimensiona el elemento sobre la pagina. La posicion y el
+     tamano se guardan en PORCENTAJE, asi que se adaptan a cualquier
+     pantalla y zoom.
+  5. En el panel derecho configura sus propiedades (ver seccion 6). Los
+     archivos se suben arrastrandolos a la caja "Arrastra un archivo".
+  6. Ajustes de todo el libro:
+       - Textura de fondo de las tarjetas de bio
+       - PDF descargable para lectores (boton de descarga del visor)
+       - Indice del libro (titulo + pagina a la que salta)
+  7. Guarda. Esto escribe public/pages/<libro>/manifest.json en tu equipo.
+
+PASO 3 - Probar en el visor
+
+  Abre http://localhost:3000/ y prueba: voltear paginas, botones, sonidos,
+  videos, indice y boton "Descargar PDF".
+
+PASO 4 - Publicar (Netlify)
+
+  El editor modifica archivos de tu equipo; para que aparezcan en internet
+  hay que subirlos a GitHub. En una terminal del proyecto:
+
+    git status                       (revisa que aparezcan tus cambios)
+    git add .gitignore src public/pages/librovirtualdemo2
+    git commit -m "Descripcion del cambio"
+    git push
+
+  Netlify detecta el push y vuelve a desplegar automaticamente.
+  Verifica que en "git status" aparezcan los archivos nuevos que subiste
+  desde el editor (imagenes, audios, el PDF de descarga, manifest.json).
+  Si un archivo no aparece, probablemente lo esta ignorando .gitignore.
+
+
+------------------------------------------------------------------------------
+ 6. TIPOS DE OVERLAY Y SUS PROPIEDADES
+------------------------------------------------------------------------------
+
+Cada overlay pertenece a una pagina y tiene:
+
+  id, type, x, y, w, h   Identificador, tipo y posicion/tamano en % de la
+                         pagina.
+  visible                Si se ve al cargar la pagina (permite overlays
+                         ocultos que un boton revela).
+  clickable              Si responde a clics.
+  action                 Que hace al hacer clic (ver abajo).
+  audioSrc               Sonido que suena en CADA clic (independiente de
+                         "action").
+  fit                    "contain" (se ve completa) o "cover" (la caja
+                         recorta, como una ventana).
+
+TIPOS (type):
+  image    Imagen, WebP o GIF (requiere "src").
+  button   Boton. Puede usar una imagen ("src") o un emoji/texto ("icon").
+  reveal   Punto de revelado tipo "equipo": al tocarlo, una foto se revela
+           en circulo y aparece una tarjeta con nombre, cargo y bio
+           (campos name, role, bio, avatarColor).
+  video    Video de YouTube embebido en la pagina (campo "videoId" = el
+           codigo del video, y "rotate" para videos verticales). Al pasar
+           de pagina los videos se pausan solos.
+
+ACCIONES (action):
+  none          No hace nada (solo suena si tiene audioSrc).
+  toggleTarget  Muestra/oculta otros overlays de la misma pagina
+                (targetIds).
+  timedSwap     Muestra otros overlays (targetIds) durante "durationMs"
+                milisegundos y luego revierte.
+  link          Abre una URL (linkUrl).
+
+Al pasar de pagina, todos los audios se detienen y se reinician.
+
+
+------------------------------------------------------------------------------
+ 7. EL ARCHIVO manifest.json
+------------------------------------------------------------------------------
+
+Ubicacion: public/pages/<libro>/manifest.json
+
+  name              Nombre del libro.
+  source            Nombre del PDF original.
+  pages             Numero total de paginas.
+  format            "webp" o "png".
+  scale, quality    Parametros usados al convertir.
+  basePath          Carpeta publica de las paginas
+                    (ej. "/pages/librovirtualdemo2").
+  overlays          Overlays por pagina. Clave = numero de pagina como texto
+                    ("1", "2", ...), valor = lista de overlays.
+  revealImages      Foto real por pagina para los puntos de revelado.
+  revealCardBg      Textura de fondo de las tarjetas de bio.
+  tableOfContents   Indice: [{ id, label, page }].
+  downloadPdfUrl    Ruta del PDF descargable
+                    (ej. "/pages/<libro>/assets/downloads/<archivo>.pdf").
+
+Las rutas empiezan con "/" y son relativas a la carpeta public/. El tipo
+completo esta en src/types/overlay.ts (si agregas un campo nuevo, agregalo
+ahi primero).
+
+
+------------------------------------------------------------------------------
+ 8. COMO MODIFICAR EL PROYECTO
+------------------------------------------------------------------------------
+
+Cambiar el titulo de la pestana
+  Archivo src/lib/book-config.ts, dentro de "bookConfig":
+    title: "Libro virtual demo"
+  Aqui tambien se cambia "description". El idioma esta en src/app/layout.tsx.
+
+Cambiar el icono de la pestana
+  Reemplaza src/app/favicon.ico.
+
+Ocultar el icono "N" de Next.js en desarrollo
+  Ya esta desactivado en next.config.ts con:  devIndicators: false
+  (ese icono nunca aparece en produccion).
+
+Mostrar otro libro / agregar un libro nuevo
+  El proyecto trabaja con UN libro activo. Se configura en un solo lugar:
+    src/lib/book-config.ts -> bookConfig.id: "librovirtualdemo2"
+  Ese identificador debe coincidir con la carpeta en public/pages/.
+  El visor, la API del manifiesto y las subidas usan esta configuracion.
+  Al cambiarlo, recarga el editor para no seguir trabajando con otro libro.
+  Cambiar el libro activo NO retira los demas archivos de public/ ni de Git.
+  Revisa recursos e historial antes de distribuir una version publica.
+
+Cambiar los pasos de zoom
+  src/components/FlipBook.tsx:
+    const ZOOM_STEPS  = [1, 1.5, 2]
+    const ZOOM_LABELS = ["100%", "150%", "200%"]
+  Ambas listas deben tener la misma cantidad de elementos.
+
+Cambiar cuando se considera movil / tablet / PC
+  src/components/FlipBook.tsx, funcion getMode():
+    PC: 1024 px o mas (doble pagina) | Tablet: 768-1023 | Movil: menos de 768
+
+Cambiar limites de subida
+  src/app/api/upload/route.ts:
+    PDF: 40 MB | imagenes y audio: 10 MB   (variable "maxSize")
+    Tipos permitidos: IMAGE_TYPES, AUDIO_TYPES, PDF_TYPES.
+
+Cambiar el texto o la posicion del boton "Descargar PDF"
+  src/components/FlipBook.tsx, busca "Descargar PDF" (esquina inferior
+  izquierda).
+
+Cambiar los sonidos de voltear pagina
+  Reemplaza public/sounds/page-flip.mp3 y page-drag.mp3 (mismo nombre).
+
+Agregar un nuevo tipo de overlay
+  1. Agrega el tipo en src/types/overlay.ts (OverlayType y campos nuevos).
+  2. Dibujalo en src/lib/overlay-render.ts (mira buildVideoElement como
+     ejemplo).
+  3. Llama esa funcion desde src/components/FlipBook.tsx.
+  4. Agrega el boton y sus campos en src/app/editor/page.tsx
+     (newOverlay() y el panel derecho).
+
+Regla general: despues de cualquier cambio, prueba en local con
+"npm run dev" y ejecuta "npm run build" antes de subir, para detectar
+errores que solo aparecen al compilar.
+
+
+------------------------------------------------------------------------------
+ 9. PRODUCCION (NETLIFY): LO QUE HAY QUE SABER
+------------------------------------------------------------------------------
+
+1) EL EDITOR NO GUARDA EN PRODUCCION.
+   Las APIs /api/upload y /api/manifest (PUT) escriben archivos dentro de
+   public/. En Netlify el disco es de solo lectura, asi que solo funcionan
+   en tu equipo. Flujo correcto: editar en local -> git push -> Netlify
+   publica. Si algun dia quieres editar desde la web publicada, hay que
+   guardar en un almacenamiento externo (Netlify Blobs, S3, etc.).
+
+2) LA RUTA /api/manifest (PUT) NO TIENE AUTENTICACION.
+   Esta anotado en el codigo. Antes de usar el proyecto en un servidor donde
+   se pueda escribir en disco, hay que protegerla (login o clave de admin).
+   Considera tambien ocultar o proteger la pagina /editor en produccion.
+
+3) EL .gitignore Y LOS PDF.
+   El archivo debe llamarse exactamente ".gitignore" (con punto). Un archivo
+   llamado "gitignore" (sin punto) NO tiene efecto. Regla actual:
+       /public/*.pdf
+   Ignora solo los PDF de la raiz de public/ (el PDF fuente pesado, mas de
+   100 MB, que GitHub rechaza). Los PDF dentro de public/pages/... SI se
+   suben, y es necesario porque el boton "Descargar PDF" los usa. No vuelvas
+   a poner "*.pdf" porque ignoraria todos.
+
+4) ARCHIVOS GRANDES.
+   GitHub rechaza archivos de mas de 100 MB. Usa PDF comprimidos para el
+   PDF descargable (el actual pesa unos 16 MB).
+
+5) PROBAR DESPUES DE PUBLICAR.
+   Abre directamente la URL del PDF descargable en el navegador. Si carga
+   como PDF, todo bien.
+
+
+------------------------------------------------------------------------------
+ 10. SOLUCION DE PROBLEMAS
+------------------------------------------------------------------------------
+
+"El boton Descargar PDF baja un archivo .html en produccion"
+  El PDF no esta en el repositorio (ver 9.3). Revisa "git status", agrega el
+  PDF de public/pages/<libro>/assets/downloads/ y haz push.
+
+"El boton de descarga desaparecio despues de reconvertir el PDF"
+  El script convert-pdf.mjs no conserva downloadPdfUrl (ver paso 1). Vuelve
+  a asignar el PDF descargable en el editor.
+
+"Los overlays quedaron en la pagina equivocada"
+  Cambio el numero de paginas del PDF. Ajustalos en el editor.
+
+"El editor dice que no se pudo leer/guardar el manifest"
+  Estas en la version publicada (solo lectura) o el servidor de desarrollo
+  no esta corriendo. Usa el editor solo con "npm run dev".
+
+"Un archivo subido en el editor no aparece en la web publicada"
+  No se hizo git add/commit/push de ese archivo, o .gitignore lo ignora.
+
+"Un audio/imagen/PDF no se sube"
+  Revisa el tipo de archivo permitido y el limite de tamano (seccion 8).
+
+"El script de conversion falla con espacios en el nombre del PDF"
+  Pon el nombre entre comillas o renombra el PDF sin espacios:
+    node scripts/convert-pdf.mjs "public/mi libro.pdf"
+
+"Cambie next.config.ts y no pasa nada"
+  Reinicia "npm run dev".
+
+
+------------------------------------------------------------------------------
+ 11. RESUMEN RAPIDO
+------------------------------------------------------------------------------
+
+  Nuevo libro / cambio de PDF:
+    node scripts/convert-pdf.mjs public/<archivo>.pdf
+  Editar interacciones:
+    npm run dev  ->  http://localhost:3000/editor  ->  Guardar
+  Revisar:
+    http://localhost:3000/
+  Publicar:
+    git add ...  ->  git commit -m "..."  ->  git push
+
+==============================================================================

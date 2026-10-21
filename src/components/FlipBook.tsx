@@ -1,40 +1,33 @@
 "use client"
 
 /**
- * FlipBook.tsx — v7.0
+ * FlipBook.tsx — v7.3 (ZOOM FIX - SIN updateSize)
  * ─────────────────────────────────────────────────────────────────
- * Novedades v7:
- *  - Zoom: doble clic/tap + botones +/- (100% → 150% → 200%)
- *  - Fullscreen: botón + tecla F (desktop)
- *  - Sonido: página volteando (inicio drag + flip completo)
- *  - Botón mute/unmute en barra de navegación
+ * Fix: Zoom centrado usando solo CSS, sin métodos del PageFlip
  * ─────────────────────────────────────────────────────────────────
  */
 
 import { useEffect, useRef, useState, useCallback } from "react"
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
+import { library } from "@fortawesome/fontawesome-svg-core"
+import { faDownload } from "@fortawesome/free-solid-svg-icons"
 import type { SizeType } from "page-flip"
 
-// ─── Tipos ────────────────────────────────────────────────────────
-interface Manifest {
-  name: string
-  source: string
-  pages: number
-  format: string
-  basePath: string
-}
+library.add(faDownload)
+import type { Manifest } from "@/types/overlay"
+import { buildOverlayElement, buildRevealHotspot, buildVideoElement, createOverlayRegistry, disposeOverlayRegistry, pauseAllAudio, pauseAllVideos } from "@/lib/overlay-render"
 
 interface FlipBookProps {
-  manifest: string
+  manifest: string | Manifest
   title?: string
+  embedded?: boolean
 }
 
 type DeviceMode = "mobile" | "tablet" | "desktop"
 
-// ─── Constantes ───────────────────────────────────────────────────
-const ZOOM_STEPS   = [1, 1.5, 2]      // 100%, 150%, 200%
+const ZOOM_STEPS   = [1, 1.5, 2]
 const ZOOM_LABELS  = ["100%", "150%", "200%"]
 
-// ─── Utilidades ───────────────────────────────────────────────────
 function getMode(vw: number): DeviceMode {
   if (vw >= 1024) return "desktop"
   if (vw >= 768)  return "tablet"
@@ -54,87 +47,149 @@ function getImageSize(src: string): Promise<{ w: number; h: number }> {
   })
 }
 
-// ─── Componente principal ─────────────────────────────────────────
-export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps) {
-  const [manifest, setManifest]       = useState<Manifest | null>(null)
-  const [error, setError]             = useState<string | null>(null)
+export default function FlipBook({ manifest: source, title, embedded = false }: FlipBookProps) {
+  const [loaded, setLoaded] = useState<{ source: string; value: Manifest } | null>(null)
+  const manifest = typeof source === "object" ? source : loaded?.source === source ? loaded.value : null
+  const [error, setError] = useState<{ source: string | Manifest; message: string } | null>(null)
+  const [reloadTick, setReloadTick] = useState(0)
   const [currentPage, setCurrentPage] = useState(0)
   const [isReady, setIsReady]         = useState(false)
   const [isCoverView, setIsCoverView] = useState(true)
   const [mode, setMode]               = useState<DeviceMode>("desktop")
   const [resizeTick, setResizeTick]   = useState(0)
-
-  // ── Zoom ──────────────────────────────────────────────────────
-  const [zoomIdx, setZoomIdx]         = useState(0)   // índice en ZOOM_STEPS
-
-  // ── Fullscreen ────────────────────────────────────────────────
+  const [zoomIdx, setZoomIdx]         = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
-
-  // ── Sonido ────────────────────────────────────────────────────
   const [isMuted, setIsMuted]           = useState(false)
-  const isMutedRef = useRef(false)      // ref para acceder en closures sin recrear playSound
+  const [tocOpen, setTocOpen]           = useState(false)
+  
+  const isMutedRef = useRef(false)
   const audioFlip = useRef<HTMLAudioElement | null>(null)
   const audioDrag = useRef<HTMLAudioElement | null>(null)
-  // Flag para evitar reproducir drag si ya está en progreso
   const isDragging = useRef(false)
-
-  // ── Pan (arrastre cuando hay zoom) ───────────────────────────
   const isPanning   = useRef(false)
   const panStart    = useRef({ x: 0, y: 0, scrollX: 0, scrollY: 0 })
-
   const wrapRef  = useRef<HTMLDivElement>(null)
   const bookEl   = useRef<HTMLDivElement | null>(null)
+  const savedPageRef = useRef(0)
+  const initializedManifest = useRef<Manifest | null>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const flipRef  = useRef<any>(null)
 
-  // ── Inicializar audios ───────────────────────────────────────
   useEffect(() => {
     audioFlip.current = new Audio("/sounds/page-flip.mp3")
     audioDrag.current = new Audio("/sounds/page-drag.mp3")
     audioFlip.current.volume = 0.7
     audioDrag.current.volume = 0.35
     return () => {
+      audioFlip.current?.pause()
+      audioDrag.current?.pause()
       audioFlip.current = null
       audioDrag.current = null
     }
   }, [])
 
-  // Mantener ref sincronizado con estado para uso en closures
   useEffect(() => {
     isMutedRef.current = isMuted
   }, [isMuted])
 
-  // ── Helper: reproducir sonido (usa ref, no estado) ───────────
   const playSound = useCallback((audio: HTMLAudioElement | null) => {
     if (!audio || isMutedRef.current) return
     audio.currentTime = 0
     audio.play().catch(() => {})
   }, [])
 
-  // ── Cargar manifest ──────────────────────────────────────────
+  // ─── FUNCIÓN CLAVE: Aplicar zoom con CSS puro ─────────────────
+  const applyZoom = useCallback(() => {
+    if (!bookEl.current || !flipRef.current) return
+    
+    const scale = ZOOM_STEPS[zoomIdx]
+    const isCover = currentPage === 0 || currentPage >= (manifest?.pages ?? 1) - 1
+    
+    if (zoomIdx === 0) {
+  // SIN ZOOM: comportamiento original CON transición suave
+  const baseX = mode === "desktop" && isCover
+    ? (currentPage === 0 ? "-25%" : "25%")
+    : "0"
+    
+  bookEl.current.style.transition = "transform 0.3s cubic-bezier(0.4,0,0.2,1)"
+  bookEl.current.style.transform = `translateX(${baseX}) scale(1)`
+  bookEl.current.style.translate = "0px 0px"
+  bookEl.current.style.width = ""
+  bookEl.current.style.marginLeft = ""
+  
+} else {
+  // CON ZOOM: mismo criterio de porcentaje que sin zoom.
+  // El % se resuelve sobre el bounding box propio del elemento (no cambia con scale),
+  // así que queda centrado en cualquier nivel de zoom sin recalcular en px.
+  const baseX = mode === "desktop" && isCover
+    ? (currentPage === 0 ? "-25%" : "25%")
+    : "0"
+
+  // SIN TRANSICIÓN: aplicar inmediatamente para evitar el "salto" lateral
+  bookEl.current.style.transition = "none"
+  bookEl.current.style.transform = `translateX(${baseX}) scale(${scale})`
+  bookEl.current.style.translate = "0px 0px"
+}
+    
+    bookEl.current.style.transformOrigin = "center center"
+    bookEl.current.style.transition = "transform 0.3s cubic-bezier(0.4,0,0.2,1)"
+  }, [zoomIdx, currentPage, mode, manifest])
+
+  // Aplicar zoom cuando cambia
   useEffect(() => {
-    fetch(manifestUrl)
+    if (isReady) {
+      applyZoom()
+    }
+  }, [applyZoom, isReady])
+
+  useEffect(() => {
+    if (typeof source !== "string") return
+    const controller = new AbortController()
+    let active = true
+    fetch(source, { signal: controller.signal })
       .then(r => {
         if (!r.ok) throw new Error(`No se pudo cargar: ${r.status}`)
         return r.json()
       })
-      .then(setManifest)
-      .catch(e => setError(e.message))
-  }, [manifestUrl])
+      .then(value => {
+        if (active) setLoaded({ source, value })
+      })
+      .catch(e => {
+        if (active) setError({ source, message: e instanceof Error ? e.message : "Error al cargar el manifiesto" })
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [source, reloadTick])
 
-  // ── Inicializar StPageFlip ───────────────────────────────────
   useEffect(() => {
     if (!manifest || !wrapRef.current) return
+    if (initializedManifest.current !== manifest) {
+      savedPageRef.current = 0
+      initializedManifest.current = manifest
+    }
 
     let destroyed = false
+    const overlayRegistry = createOverlayRegistry()
+    let pageFlip: import("page-flip").PageFlip | null = null
+    const dispose = () => {
+      disposeOverlayRegistry(overlayRegistry)
+      audioFlip.current?.pause()
+      audioDrag.current?.pause()
+      isDragging.current = false
+      isPanning.current = false
+      if (pageFlip) {
+        try { pageFlip.destroy() } catch { /* Already detached by PageFlip. */ }
+        if (flipRef.current === pageFlip) flipRef.current = null
+        pageFlip = null
+      }
+      bookEl.current?.remove()
+      bookEl.current = null
+    }
 
     const init = async () => {
-      if (flipRef.current) {
-        try { flipRef.current.destroy() } catch (_) {}
-        flipRef.current = null
-      }
-
-      const initialMode      = getMode(window.innerWidth)
+      const initialMode = getMode(window.innerWidth)
       const initialTransform = initialMode === "desktop" ? "translateX(-25%)" : "translateX(0)"
 
       if (!bookEl.current) {
@@ -158,10 +213,8 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
       if (destroyed || !bookEl.current) return
       const aspectRatio = imgW / imgH
 
-      const vw        = window.innerWidth
-      const vh        = window.innerHeight
-      const navH      = currentMode === "mobile" ? 96 : 112
-      const maxH      = vh - navH - 32
+      const maxW      = Math.max(1, wrapRef.current!.clientWidth - 32)
+      const maxH      = Math.max(1, wrapRef.current!.clientHeight - 32)
       const isDesktop = currentMode === "desktop"
 
       let pageW: number
@@ -170,13 +223,13 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
       if (isDesktop) {
         pageH = maxH
         pageW = Math.round(pageH * aspectRatio)
-        if (pageW * 2 > vw - 48) {
-          pageW = Math.round((vw - 48) / 2)
+        if (pageW * 2 > maxW) {
+          pageW = Math.max(1, Math.floor(maxW / 2))
           pageH = Math.round(pageW / aspectRatio)
         }
       } else {
         const widthFraction = currentMode === "mobile" ? 0.92 : 0.78
-        pageW = Math.round(vw * widthFraction)
+        pageW = Math.max(1, Math.round(maxW * widthFraction))
         pageH = Math.round(pageW / aspectRatio)
         if (pageH > maxH) {
           pageH = maxH
@@ -195,7 +248,13 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
         autoSize:            false,
         maxShadowOpacity:    0.5,
         mobileScrollSupport: false,
+        // Desactiva la esquina "sensible" que gana el clic contra overlays
+        // ubicados cerca del borde (ej: un botón en la esquina inferior).
+        // El arrastre normal para pasar de página en cualquier otra parte
+        // de la hoja sigue funcionando igual.
+        showPageCorners:     false,
       })
+      pageFlip = pf
 
       Array.from({ length: pages }, (_, i) => {
         const n       = i + 1
@@ -204,6 +263,7 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
 
         const div = document.createElement("div")
         div.className = "pf-page"
+        div.style.position = "relative" // necesario para posicionar overlays en absoluto encima
         if (isFirst || isLast) div.setAttribute("data-density", "hard")
 
         const img = document.createElement("img")
@@ -213,31 +273,74 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
         img.style.cssText = "width:100%;height:100%;object-fit:fill;display:block;"
 
         div.appendChild(img)
+
+        // Foto real de esta página (mismo tamaño/composición que la imagen de
+        // fieltro), revelada por los hotspots tipo "reveal" con clip-path.
+        const revealSrc = manifest.revealImages?.[String(n)]
+        let revealImg: HTMLImageElement | null = null
+        if (revealSrc) {
+          revealImg = document.createElement("img")
+          revealImg.src = revealSrc
+          revealImg.draggable = false
+          revealImg.alt = ""
+          revealImg.style.cssText =
+            "position:absolute;inset:0;width:100%;height:100%;object-fit:fill;display:block;" +
+            "clip-path:circle(0% at 50% 50%);-webkit-clip-path:circle(0% at 50% 50%);" +
+            "transition:clip-path .35s cubic-bezier(.34,1.4,.64,1);pointer-events:none;"
+          div.appendChild(revealImg)
+        }
+
+        const pageOverlays = manifest.overlays?.[String(n)]
+        pageOverlays?.forEach(overlay => {
+          if (overlay.type === "reveal" && revealImg) {
+            div.appendChild(buildRevealHotspot(overlay, revealImg, div, manifest.revealCardBg))
+          } else if (overlay.type === "video") {
+            div.appendChild(buildVideoElement(overlay, overlayRegistry))
+          } else {
+            div.appendChild(buildOverlayElement(overlay, overlayRegistry))
+          }
+        })
+
         bookEl.current!.appendChild(div)
       })
 
       pf.loadFromHTML(bookEl.current!.querySelectorAll(".pf-page"))
+      const restoredPage = Math.max(0, Math.min(savedPageRef.current, pages - 1))
+      if (restoredPage > 0) pf.turnToPage(restoredPage)
 
-      // ── Eventos StPageFlip ───────────────────────────────────
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pf.on("flip", (e: any) => {
+        if (destroyed) return
         const idx     = e.data as number
         const isCover = idx === 0 || idx >= pages - 1
         setCurrentPage(idx)
         setIsCoverView(isCover)
-        setZoomIdx(0)   // resetear zoom al pasar página
+        setZoomIdx(0) // Resetear zoom al pasar página
         isDragging.current = false
-        // Sonido flip completo
         playSound(audioFlip.current)
+        pauseAllVideos(overlayRegistry) // que ningún video siga sonando de fondo
+        pauseAllAudio(overlayRegistry) // que ningún audio de botón siga sonando de fondo
+        
+        // Restaurar transform normal después del flip
+        requestAnimationFrame(() => {
+          if (!destroyed && bookEl.current) {
+            const baseX = currentMode === "desktop" && isCover
+              ? (idx === 0 ? "-25%" : "25%")
+              : "0"
+            bookEl.current.style.transform = `translateX(${baseX}) scale(1)`
+            bookEl.current.style.translate = "0px 0px"
+            bookEl.current.style.width = ""
+          }
+        })
       })
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pf.on("changeState", (e: any) => {
+        if (destroyed) return
         const idx     = pf.getCurrentPageIndex() as number
         const isCover = idx === 0 || idx >= pages - 1
         setIsCoverView(isCover)
 
-        // Sonido al iniciar el drag (estado "user_fold")
         if (e.data === "user_fold" && !isDragging.current) {
           isDragging.current = true
           playSound(audioDrag.current)
@@ -248,52 +351,55 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
       })
 
       flipRef.current = pf
+      setCurrentPage(restoredPage)
+      setIsCoverView(restoredPage === 0 || restoredPage >= pages - 1)
+      setZoomIdx(0)
 
       if (bookEl.current) {
         bookEl.current.style.opacity    = "0"
         bookEl.current.style.transition = "opacity 0.4s ease"
         requestAnimationFrame(() => {
-          if (bookEl.current) bookEl.current.style.opacity = "1"
+          if (!destroyed && bookEl.current) bookEl.current.style.opacity = "1"
         })
       }
 
       setIsReady(true)
     }
 
-    init()
+    init().catch(e => {
+      if (destroyed) return
+      destroyed = true
+      dispose()
+      setIsReady(false)
+      setError({ source, message: e instanceof Error ? e.message : "No se pudo preparar el libro" })
+    })
 
     return () => {
       destroyed = true
-      if (flipRef.current) {
-        try { flipRef.current.destroy() } catch (_) {}
-        flipRef.current = null
-      }
-      if (bookEl.current) {
-        bookEl.current.remove()
-        bookEl.current = null
-      }
+      dispose()
       setIsReady(false)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifest, resizeTick])
+  }, [manifest, source, resizeTick, reloadTick, playSound])
 
-  // ── Resize ───────────────────────────────────────────────────
   useEffect(() => {
-    if (!manifest) return
+    if (!manifest || !wrapRef.current) return
+    const wrap = wrapRef.current
     let lastMode = getMode(window.innerWidth)
+    let lastWidth = wrap.clientWidth
+    let lastHeight = wrap.clientHeight
     let timer: ReturnType<typeof setTimeout>
 
     const handleResize = () => {
       clearTimeout(timer)
       timer = setTimeout(() => {
         const newMode = getMode(window.innerWidth)
-        if (newMode !== lastMode) {
+        const width = wrap.clientWidth
+        const height = wrap.clientHeight
+        if (newMode !== lastMode || width !== lastWidth || height !== lastHeight) {
           lastMode = newMode
-          if (flipRef.current) {
-            try { flipRef.current.destroy() } catch (_) {}
-            flipRef.current = null
-          }
-          if (bookEl.current) bookEl.current.innerHTML = ""
+          lastWidth = width
+          lastHeight = height
+          savedPageRef.current = flipRef.current?.getCurrentPageIndex() ?? 0
           setIsReady(false)
           setZoomIdx(0)
           setResizeTick(t => t + 1)
@@ -302,106 +408,39 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     }
 
     window.addEventListener("resize", handleResize)
+    const observer = new ResizeObserver(handleResize)
+    observer.observe(wrap)
     return () => {
+      observer.disconnect()
       window.removeEventListener("resize", handleResize)
       clearTimeout(timer)
     }
-  }, [manifest])
-
-  // ── Zoom ─────────────────────────────────────────────────────
-  const applyZoom = useCallback((idx: number) => {
-    if (!bookEl.current) return
-    const scale = ZOOM_STEPS[idx]
-
-    if (idx === 0) {
-      // Sin zoom: restaurar translateX para centrado de portada/contraportada
-      const isCover_ = flipRef.current
-        ? (flipRef.current.getCurrentPageIndex() === 0 ||
-           flipRef.current.getCurrentPageIndex() >= (manifest?.pages ?? 1) - 1)
-        : true
-      const baseX = mode === "desktop" && isCover_
-        ? (flipRef.current?.getCurrentPageIndex() === 0 ? "-25%" : "25%")
-        : "0"
-      bookEl.current.style.translate       = "0px 0px"
-      bookEl.current.style.transform       = `translateX(${baseX}) scale(1)`
-      bookEl.current.style.transformOrigin = "center center"
-      bookEl.current.style.margin          = "auto"
-    } else {
-      // Con zoom: eliminar translateX de portada y centrar limpio
-      // El pan se maneja con translate independiente
-      bookEl.current.style.transform       = `translateX(0) scale(${scale})`
-      bookEl.current.style.transformOrigin = "center center"
-      bookEl.current.style.translate       = "0px 0px"
-      bookEl.current.style.margin          = "auto"
-    }
-    bookEl.current.style.transition = "transform 0.3s cubic-bezier(0.4,0,0.2,1)"
-  }, [mode, manifest])
-
-  // Bloquear/desbloquear flip en StPageFlip según zoom
-  const setFlipLocked = useCallback((locked: boolean) => {
-    if (!flipRef.current) return
-    try {
-      // StPageFlip expone el renderer — podemos deshabilitar los eventos touch/mouse
-      // La forma más limpia es usar el método oficial si existe, o el overlay
-      if (locked) {
-        flipRef.current.flipNext = () => {}
-        flipRef.current.flipPrev = () => {}
-      }
-    } catch (_) {}
-  }, [])
+  }, [manifest, reloadTick])
 
   const zoomIn = useCallback(() => {
-    setZoomIdx(prev => {
-      const next = Math.min(prev + 1, ZOOM_STEPS.length - 1)
-      applyZoom(next)
-      return next
-    })
-  }, [applyZoom])
+    setZoomIdx(prev => Math.min(prev + 1, ZOOM_STEPS.length - 1))
+  }, [])
 
   const zoomOut = useCallback(() => {
-    setZoomIdx(prev => {
-      const next = Math.max(prev - 1, 0)
-      applyZoom(next)
-      return next
-    })
-  }, [applyZoom])
+    setZoomIdx(prev => Math.max(prev - 1, 0))
+  }, [])
 
   const zoomToggle = useCallback(() => {
-    setZoomIdx(prev => {
-      const next = (prev + 1) % ZOOM_STEPS.length
-      applyZoom(next)
-      return next
-    })
-  }, [applyZoom])
+    setZoomIdx(prev => (prev + 1) % ZOOM_STEPS.length)
+  }, [])
 
-  // Doble clic/tap sobre el área del libro
   useEffect(() => {
     const el = wrapRef.current
     if (!el) return
     const handler = (e: MouseEvent) => {
-      // Solo si el clic fue sobre el libro (no la barra nav)
       if (e.target === el || el.contains(e.target as Node)) {
         zoomToggle()
       }
     }
     el.addEventListener("dblclick", handler)
     return () => el.removeEventListener("dblclick", handler)
-  }, [zoomToggle])
+  }, [zoomToggle, manifest, reloadTick])
 
-  // ── Centrado portada (solo cuando NO hay zoom) ───────────────
-  useEffect(() => {
-    if (!bookEl.current || mode !== "desktop" || zoomIdx > 0) return
-    const baseX = isCoverView
-      ? (currentPage === 0 ? "-25%" : "25%")
-      : "0"
-    // Resetear translate antes de aplicar translateX para evitar doble offset
-    bookEl.current.style.translate       = "0px 0px"
-    bookEl.current.style.transform       = `translateX(${baseX}) scale(1)`
-    bookEl.current.style.transformOrigin = "center center"
-    bookEl.current.style.transition      = "transform 0.5s cubic-bezier(0.4,0,0.2,1), opacity 0.4s ease"
-  }, [isCoverView, currentPage, mode, zoomIdx])
-
-  // ── Fullscreen ───────────────────────────────────────────────
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {})
@@ -414,55 +453,29 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     const handler = () => {
       const isFull = !!document.fullscreenElement
       setIsFullscreen(isFull)
-      const savedPage = flipRef.current ? flipRef.current.getCurrentPageIndex() : 0
-
-      // Resetear translate Y zoom antes de reinicializar
-      if (bookEl.current) {
-        bookEl.current.style.translate  = "0px 0px"
-        bookEl.current.style.transform  = ""
-        bookEl.current.style.transition = "none"
-      }
-
-      setTimeout(() => {
-        if (bookEl.current) bookEl.current.innerHTML = ""
-        setIsReady(false)
-        setZoomIdx(0)
-        setResizeTick(t => t + 1)
-        setTimeout(() => {
-          if (flipRef.current && savedPage > 0) {
-            flipRef.current.turnToPage(savedPage)
-            setCurrentPage(savedPage)
-            const total = flipRef.current.getPageCount()
-            setIsCoverView(savedPage === 0 || savedPage >= total - 1)
-          }
-        }, 800)
-      }, 300)
     }
     document.addEventListener("fullscreenchange", handler)
     return () => document.removeEventListener("fullscreenchange", handler)
   }, [])
 
-  // ── Teclado ──────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (mode !== "desktop") return
-      // Navegación solo disponible sin zoom
+      
       if (e.key === "ArrowRight" && zoomIdx === 0) flipRef.current?.flipNext("bottom")
       if (e.key === "ArrowLeft"  && zoomIdx === 0) flipRef.current?.flipPrev("bottom")
       if (e.key === "f" || e.key === "F") toggleFullscreen()
       if (e.key === "+" || e.key === "=") zoomIn()
       if (e.key === "-") zoomOut()
-      // Escape para salir del zoom
+      
       if (e.key === "Escape" && zoomIdx > 0) {
         setZoomIdx(0)
-        applyZoom(0)
       }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [mode, toggleFullscreen, zoomIn, zoomOut, zoomIdx, applyZoom])
+  }, [mode, toggleFullscreen, zoomIn, zoomOut, zoomIdx])
 
-  // ── Navegación ───────────────────────────────────────────────
   const goNext = useCallback(() => flipRef.current?.flipNext("bottom"), [])
   const goPrev = useCallback(() => flipRef.current?.flipPrev("bottom"), [])
   const goFirst = useCallback(() => {
@@ -472,7 +485,16 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     setZoomIdx(0)
   }, [])
 
-  // ── UI derivada ──────────────────────────────────────────────
+  const goToTocPage = useCallback((page: number) => {
+    const totalPages = manifest?.pages ?? 1
+    const idx = Math.max(0, Math.min(totalPages - 1, page - 1))
+    flipRef.current?.turnToPage(idx)
+    setCurrentPage(idx)
+    setIsCoverView(idx === 0)
+    setZoomIdx(0)
+    setTocOpen(false)
+  }, [manifest])
+
   const totalPages       = manifest?.pages ?? 0
   const displayPage      = currentPage + 1
   const isFirstPage      = currentPage === 0
@@ -481,21 +503,27 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
   const isMobile         = mode === "mobile"
   const isMobileOrTablet = mode === "mobile" || mode === "tablet"
 
-  // ── Error / Carga ────────────────────────────────────────────
-  if (error) return (
-    <div className="h-screen flex flex-col items-center justify-center bg-[#0a0a0a] gap-4 p-8">
+  const rootHeight = embedded ? "h-full min-h-0" : "h-screen"
+
+  if (error?.source === source) return (
+    <div className={`${rootHeight} flex flex-col items-center justify-center bg-[#0a0a0a] gap-4 p-8`}>
       <div className="text-red-500 font-mono text-sm">⚠ Error al cargar el visor</div>
-      <div className="text-gray-600 text-xs max-w-sm text-center">{error}</div>
+      <div className="text-gray-600 text-xs max-w-sm text-center">{error.message}</div>
+      <button className="text-blue-500 text-sm" onClick={() => {
+        setError(null)
+        setLoaded(null)
+        savedPageRef.current = 0
+        setReloadTick(t => t + 1)
+      }}>Reintentar</button>
     </div>
   )
 
   if (!manifest) return (
-    <div className="h-screen flex items-center justify-center bg-[#0a0a0a] text-blue-500 font-mono tracking-widest animate-pulse">
+    <div className={`${rootHeight} flex items-center justify-center bg-[#0a0a0a] text-blue-500 font-mono tracking-widest animate-pulse`}>
       CARGANDO...
     </div>
   )
 
-  // ── Íconos SVG inline ────────────────────────────────────────
   const IconFullscreen = () => (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
       {isFullscreen
@@ -514,21 +542,23 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
     </svg>
   )
 
-  // ── Render ───────────────────────────────────────────────────
+  const IconList = () => (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M1 3h13M1 7.5h13M1 12h13"/>
+    </svg>
+  )
+
   return (
     <div
-      className="w-full h-screen flex flex-col bg-[#0d0d0d] overflow-hidden select-none text-white"
+      className={`relative w-full ${rootHeight} flex flex-col bg-[#0d0d0d] overflow-hidden select-none text-white`}
       role="region"
       aria-label={title ?? manifest.name}
     >
-      {/* ── ÁREA DEL LIBRO ── */}
       <div
         ref={wrapRef}
-        className="flex-1 flex items-center justify-center"
+        className="flex-1 min-h-0 min-w-0 flex items-center justify-center"
         style={{ position: "relative", overflow: "hidden" }}
       >
-        {/* Overlay de pan — cubre todo el libro cuando hay zoom
-            bloqueando el flip de StPageFlip completamente. */}
         {zoomIdx > 0 && (
           <div
             style={{
@@ -549,22 +579,23 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
             }}
             onMouseMove={(e) => {
               if (!isPanning.current || !bookEl.current || !wrapRef.current) return
+              
               const scale     = ZOOM_STEPS[zoomIdx]
               const bookW     = bookEl.current.offsetWidth
               const bookH     = bookEl.current.offsetHeight
               const wrapW     = wrapRef.current.offsetWidth
               const wrapH     = wrapRef.current.offsetHeight
-              // Límite: solo podemos mover hasta que el borde del libro
-              // llegue al borde del contenedor (nunca más allá)
-              // PADDING extra del 15% para que no se sienta claustrofóbico
+              
               const EXTRA = 0.15
               const maxX = Math.max(0, (bookW * scale - wrapW) / 2) + bookW * EXTRA
               const maxY = Math.max(0, (bookH * scale - wrapH) / 2) + bookH * EXTRA
+              
               const rawDx = panStart.current.scrollX + (e.clientX - panStart.current.x)
               const rawDy = panStart.current.scrollY + (e.clientY - panStart.current.y)
+              
               const dx = Math.min(maxX, Math.max(-maxX, rawDx))
               const dy = Math.min(maxY, Math.max(-maxY, rawDy))
-              bookEl.current.style.transform = `translateX(0) scale(${scale})`
+              
               bookEl.current.style.translate = `${dx}px ${dy}px`
             }}
             onMouseUp={() => { isPanning.current = false }}
@@ -581,24 +612,29 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
             onTouchMove={(e) => {
               if (!isPanning.current || !bookEl.current || !wrapRef.current) return
               e.preventDefault()
+              
               const scale     = ZOOM_STEPS[zoomIdx]
               const bookW     = bookEl.current.offsetWidth
               const bookH     = bookEl.current.offsetHeight
               const wrapW     = wrapRef.current.offsetWidth
               const wrapH     = wrapRef.current.offsetHeight
+              
               const EXTRA = 0.15
               const maxX = Math.max(0, (bookW * scale - wrapW) / 2) + bookW * EXTRA
               const maxY = Math.max(0, (bookH * scale - wrapH) / 2) + bookH * EXTRA
+              
               const rawDx = panStart.current.scrollX + (e.touches[0].clientX - panStart.current.x)
               const rawDy = panStart.current.scrollY + (e.touches[0].clientY - panStart.current.y)
+              
               const dx = Math.min(maxX, Math.max(-maxX, rawDx))
               const dy = Math.min(maxY, Math.max(-maxY, rawDy))
-              bookEl.current.style.transform = `translateX(0) scale(${scale})`
+              
               bookEl.current.style.translate = `${dx}px ${dy}px`
             }}
             onTouchEnd={() => { isPanning.current = false }}
           />
         )}
+        
         {!isReady && (
           <div className="absolute text-blue-500 font-mono text-sm tracking-widest animate-pulse z-10">
             PREPARANDO LIBRO...
@@ -606,16 +642,14 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
         )}
       </div>
 
-      {/* ── BARRA DE NAVEGACIÓN ── */}
       <nav
         className={`
           bg-black/85 backdrop-blur-2xl border-t border-white/5
-          flex items-center justify-between z-50
+          flex shrink-0 items-center justify-between z-50
           ${isMobile ? "h-24 px-4" : "h-28 px-6 md:px-16"}
         `}
         aria-label="Navegación del libro"
       >
-        {/* Izquierda: portada (tablet/desktop) */}
         {!isMobile && (
           <div className="flex-1 flex items-center gap-3">
             <button
@@ -628,7 +662,6 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
           </div>
         )}
 
-        {/* Centro: navegación + zoom */}
         <div className="flex flex-col items-center gap-2 flex-1">
           <div className={`flex items-center ${isMobile ? "gap-4 w-full justify-between px-1" : "gap-4 md:gap-6"}`}>
 
@@ -642,11 +675,9 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
               <span className={isMobile ? "text-2xl" : "text-xl"}>❮</span>
             </button>
 
-            {/* Contador */}
             <div className="flex flex-col items-center min-w-[80px]">
               <div className={`font-light tracking-tighter ${isMobile ? "text-xl" : "text-2xl"}`}>
                 <span className="text-blue-500 font-bold">
-                  {/* En desktop doble página mostrar "2–3", en portada/contraportada solo el número */}
                   {mode === "desktop" && !isCoverView && currentPage + 2 <= totalPages
                     ? `${displayPage}–${displayPage + 1}`
                     : displayPage
@@ -672,10 +703,8 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
               <span className={isMobile ? "text-2xl" : "text-xl"}>❯</span>
             </button>
 
-            {/* Separador */}
             <div className="w-px h-6 bg-white/10 mx-1 hidden sm:block" />
 
-            {/* Grupo zoom */}
             <div className="hidden sm:flex items-center gap-1 bg-white/5 border border-white/10 rounded-xl px-2 py-1">
               <button
                 onClick={zoomOut}
@@ -700,7 +729,6 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
 
           </div>
 
-          {/* Dots móvil/tablet */}
           {isMobileOrTablet && totalPages > 0 && (
             <div className="flex gap-1.5 mt-1">
               {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
@@ -714,10 +742,18 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
           )}
         </div>
 
-        {/* Derecha: mute + fullscreen */}
         <div className={`flex items-center gap-2 ${isMobile ? "" : "flex-1 justify-end"}`}>
 
-          {/* Mute / Unmute */}
+          <button
+            onClick={() => setTocOpen(true)}
+            disabled={!manifest?.tableOfContents?.length}
+            className="w-9 h-9 flex items-center justify-center rounded-xl border border-white/10 bg-white/5 text-gray-400 hover:bg-white/15 hover:text-white active:bg-blue-600 active:text-white disabled:opacity-30 transition-all"
+            aria-label="Índice"
+            title="Índice"
+          >
+            <IconList />
+          </button>
+
           <button
             onClick={() => setIsMuted(m => !m)}
             className={`w-9 h-9 flex items-center justify-center rounded-xl border transition-all ${
@@ -726,30 +762,105 @@ export default function FlipBook({ manifest: manifestUrl, title }: FlipBookProps
                 : "bg-white/5 border-white/10 text-gray-400 hover:text-white"
             }`}
             aria-label={isMuted ? "Activar sonido" : "Silenciar"}
-            title={isMuted ? "Activar sonido" : "Silenciar"}
           >
             <IconVolume />
           </button>
 
-          {/* Fullscreen */}
           <button
             onClick={toggleFullscreen}
             className="w-9 h-9 flex items-center justify-center rounded-xl border border-white/10 bg-white/5 text-gray-400 hover:text-white transition-all"
             aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
-            title={`Pantalla completa ${mode === "desktop" ? "(F)" : ""}`}
           >
             <IconFullscreen />
           </button>
 
-          {/* Badge versión — solo desktop */}
           {!isMobileOrTablet && (
             <div className="text-[9px] text-gray-800 border border-gray-800/50 px-2 py-1 rounded ml-1">
-              V7.0
+              V7.3
             </div>
           )}
 
         </div>
       </nav>
+
+      {manifest?.downloadPdfUrl && (
+        <a
+          href={manifest.downloadPdfUrl}
+          download
+          className={`${embedded ? "absolute" : "fixed"} left-4 z-50 flex items-center gap-2 rounded-full border border-white/10 bg-[#161616]/95 backdrop-blur px-4 py-2.5 text-xs text-gray-300 hover:bg-white/10 hover:text-white active:bg-blue-600 active:text-white shadow-lg transition-all ${
+            isMobile ? "bottom-28" : "bottom-32"
+          }`}
+          aria-label="Descargar PDF"
+          title="Descargar PDF"
+        >
+          <FontAwesomeIcon icon={faDownload} className="text-base" />
+          {!isMobile && <span>Descargar PDF</span>}
+        </a>
+      )}
+
+      {tocOpen && (
+        <>
+          {/* Backdrop: clic afuera cierra el panel sin navegar */}
+          <div
+            className={`${embedded ? "absolute" : "fixed"} inset-0 bg-black/50 z-40`}
+            onClick={() => setTocOpen(false)}
+          />
+
+          {isMobileOrTablet ? (
+            // Bottom sheet: sube desde abajo, cómodo para tocar con el dedo
+            <div className={`${embedded ? "absolute max-h-[60%]" : "fixed max-h-[60vh]"} inset-x-0 bottom-0 z-50 bg-[#161616] border-t border-white/10 rounded-t-2xl flex flex-col`}>
+              <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+                <span className="text-sm font-semibold uppercase tracking-wider text-gray-300">Índice</span>
+                <button
+                  onClick={() => setTocOpen(false)}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 active:bg-blue-600 text-gray-400 hover:text-white transition-all"
+                  aria-label="Cerrar índice"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="overflow-y-auto px-3 py-2">
+                {manifest?.tableOfContents?.map((entry) => (
+                  <button
+                    key={entry.id}
+                    onClick={() => goToTocPage(entry.page)}
+                    className="w-full flex items-center justify-between gap-3 text-left px-3 py-3.5 rounded-xl hover:bg-white/10 active:bg-blue-600 transition-all"
+                  >
+                    <span className="text-[15px]">{entry.label}</span>
+                    <span className="text-xs text-gray-500 font-mono shrink-0">pág. {entry.page}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            // Dropdown: se despliega hacia arriba desde el botón, en desktop
+            <div className={`${embedded ? "absolute max-h-[60%] flex flex-col" : "fixed"} bottom-32 right-6 md:right-16 z-50 w-72 bg-[#161616] border border-white/10 rounded-2xl shadow-2xl overflow-hidden`}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-300">Índice</span>
+                <button
+                  onClick={() => setTocOpen(false)}
+                  className="w-6 h-6 flex items-center justify-center rounded hover:bg-white/10 active:bg-blue-600 text-gray-400 hover:text-white transition-all"
+                  aria-label="Cerrar índice"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="max-h-80 overflow-y-auto py-1.5">
+                {manifest?.tableOfContents?.map((entry) => (
+                  <button
+                    key={entry.id}
+                    onClick={() => goToTocPage(entry.page)}
+                    className="w-full flex items-center justify-between gap-3 text-left px-4 py-2.5 hover:bg-white/10 active:bg-blue-600 transition-all"
+                  >
+                    <span className="text-sm">{entry.label}</span>
+                    <span className="text-[11px] text-gray-500 font-mono shrink-0">pág. {entry.page}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
