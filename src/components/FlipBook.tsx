@@ -47,6 +47,36 @@ function getImageSize(src: string): Promise<{ w: number; h: number }> {
   })
 }
 
+function IconFullscreen({ isFullscreen }: { isFullscreen: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      {isFullscreen
+        ? <path d="M6 1v5H1M9 1v5h5M1 9h5v5M9 14v-5h5"/>
+        : <path d="M1 5V1h4M10 1h4v4M14 10v4h-4M5 14H1v-4"/>
+      }
+    </svg>
+  )
+}
+
+function IconVolume({ isMuted }: { isMuted: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {isMuted
+        ? <><path d="M1 5h3l4-3v11l-4-3H1z"/><path d="M13 5l-4 5M9 5l4 5"/></>
+        : <><path d="M1 5h3l4-3v11l-4-3H1z"/><path d="M11 4a5 5 0 010 7"/><path d="M13 2a8 8 0 010 11"/></>
+      }
+    </svg>
+  )
+}
+
+function IconList() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      <path d="M1 3h13M1 7.5h13M1 12h13"/>
+    </svg>
+  )
+}
+
 export default function FlipBook({ manifest: source, title, embedded = false }: FlipBookProps) {
   const [loaded, setLoaded] = useState<{ source: string; value: Manifest } | null>(null)
   const manifest = typeof source === "object" ? source : loaded?.source === source ? loaded.value : null
@@ -524,30 +554,6 @@ export default function FlipBook({ manifest: source, title, embedded = false }: 
     </div>
   )
 
-  const IconFullscreen = () => (
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      {isFullscreen
-        ? <path d="M6 1v5H1M9 1v5h5M1 9h5v5M9 14v-5h5"/>
-        : <path d="M1 5V1h4M10 1h4v4M14 10v4h-4M5 14H1v-4"/>
-      }
-    </svg>
-  )
-
-  const IconVolume = () => (
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      {isMuted
-        ? <><path d="M1 5h3l4-3v11l-4-3H1z"/><path d="M13 5l-4 5M9 5l4 5"/></>
-        : <><path d="M1 5h3l4-3v11l-4-3H1z"/><path d="M11 4a5 5 0 010 7"/><path d="M13 2a8 8 0 010 11"/></>
-      }
-    </svg>
-  )
-
-  const IconList = () => (
-    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-      <path d="M1 3h13M1 7.5h13M1 12h13"/>
-    </svg>
-  )
-
   return (
     <div
       className={`relative w-full ${rootHeight} flex flex-col bg-[#0d0d0d] overflow-hidden select-none text-white`}
@@ -561,11 +567,11 @@ export default function FlipBook({ manifest: source, title, embedded = false }: 
       >
         {zoomIdx > 0 && (
           <div
+            className="cursor-grab active:cursor-grabbing"
             style={{
               position:  "absolute",
               inset:     0,
               zIndex:    30,
-              cursor:    isPanning.current ? "grabbing" : "grab",
             }}
             onMouseDown={(e) => {
               isPanning.current = true
@@ -763,7 +769,7 @@ export default function FlipBook({ manifest: source, title, embedded = false }: 
             }`}
             aria-label={isMuted ? "Activar sonido" : "Silenciar"}
           >
-            <IconVolume />
+            <IconVolume isMuted={isMuted} />
           </button>
 
           <button
@@ -771,7 +777,7 @@ export default function FlipBook({ manifest: source, title, embedded = false }: 
             className="w-9 h-9 flex items-center justify-center rounded-xl border border-white/10 bg-white/5 text-gray-400 hover:text-white transition-all"
             aria-label={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
           >
-            <IconFullscreen />
+            <IconFullscreen isFullscreen={isFullscreen} />
           </button>
 
           {!isMobileOrTablet && (

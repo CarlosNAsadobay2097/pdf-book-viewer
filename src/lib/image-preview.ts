@@ -53,7 +53,9 @@ export async function getImagePreview(src: string): Promise<ImagePreview> {
       if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         throw new ImagePreviewError(400, "Invalid image source")
       }
-      const info = await stat(input)
+      // Assets are served separately; serverless uses the trusted origin fallback.
+      // Do not trace the project for a runtime path already confined to /pages/.
+      const info = await stat(/* turbopackIgnore: true */ input)
       if (!info.isFile()) throw new ImagePreviewError(415, "Source is not an image file")
       if (info.size > MAX_BYTES) throw new ImagePreviewError(413, "Image exceeds 20 MiB")
       key = JSON.stringify([input, info.mtimeMs, info.size])
@@ -123,7 +125,7 @@ export async function getImagePreview(src: string): Promise<ImagePreview> {
         let bytes: Buffer
         if (Buffer.isBuffer(input)) bytes = input.subarray(0, 64)
         else {
-          const file = await open(input, "r")
+          const file = await open(/* turbopackIgnore: true */ input, "r")
           const header = Buffer.alloc(64)
           try {
             if ((await file.stat()).size > MAX_BYTES) throw new ImagePreviewError(413, "Image exceeds 20 MiB")
