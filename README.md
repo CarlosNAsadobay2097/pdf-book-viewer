@@ -1,4 +1,4 @@
-# PDF Book Viewer
+# NGi FlipBook 
 
 Framework de libros virtuales interactivos con Next.js y React: visor con efecto
 de paso de pagina, editor visual local y una prueba temporal en el navegador.
